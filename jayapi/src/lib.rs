@@ -184,12 +184,9 @@ impl DataResponseStatus for Ok {
 #[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
 #[allow(private_bounds)]
 pub struct DataResponse<STATUS: DataResponseStatus, T = ()> {
-    #[cfg_attr(feature = "musli", musli(skip))]
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub resource_ty: PhantomData<T>,
     #[cfg_attr(feature = "musli", musli(with = musli::serde))]
     //TODO: waiting for custom musli::Decode on the enum
-    data: SingleOrCollection,
+    pub data: SingleOrCollection,
     #[cfg_attr(
         feature = "serde",
         serde(skip_serializing_if = "Option::is_none", default)
@@ -198,10 +195,22 @@ pub struct DataResponse<STATUS: DataResponseStatus, T = ()> {
         feature = "musli",
         musli(skip_encoding_if = Option::is_none, default)
     )]
-    included: Option<Vec<Resource>>,
+    pub included: Option<Vec<Resource>>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Option::is_none", default)
+    )]
+    #[cfg_attr(
+        feature = "musli",
+        musli(skip_encoding_if = Option::is_none, default)
+    )]
+    pub links: Option<LinksMap>,
     #[cfg_attr(feature = "musli", musli(skip))]
     #[cfg_attr(feature = "serde", serde(skip))]
     pub status: PhantomData<STATUS>,
+    #[cfg_attr(feature = "musli", musli(skip))]
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub resource_ty: PhantomData<T>,
 }
 
 impl<STATUS: DataResponseStatus, T> DataResponse<STATUS, T> {
@@ -214,9 +223,13 @@ impl<STATUS: DataResponseStatus, T> DataResponse<STATUS, T> {
         let to_include = resources.into_iter().map(|r| r.into());
         included.extend(to_include);
     }
+    pub fn add_links<I: IntoIterator<Item = (String, String)>>(&mut self, links: I) {
+        let map = self.links.get_or_insert(LinksMap::new());
+        map.extend(links);
+    }
 }
 
-#[cfg(not(feature = "musli"))]
+#[cfg(all(not(feature = "musli"), feature = "axum"))]
 impl<STATUS: DataResponseStatus + Send + Sync, T> axum::response::IntoResponse
     for DataResponse<STATUS, T>
 {
@@ -248,6 +261,7 @@ impl<R: AsResource, STATUS: DataResponseStatus> FromIterator<R> for DataResponse
             status: PhantomData,
             resource_ty: PhantomData,
             included: None,
+            links: None,
         }
     }
 }
@@ -259,6 +273,7 @@ impl<R: AsResource, STATUS: DataResponseStatus> From<R> for DataResponse<STATUS,
             status: PhantomData,
             resource_ty: PhantomData,
             included: None,
+            links: None,
         }
     }
 }
@@ -338,13 +353,13 @@ pub struct Resource {
         feature = "serde",
         serde(skip_serializing_if = "Option::is_none", default)
     )]
-    pub attributes: Option<AttributeMap>,
+    pub attributes: Option<AttributesMap>,
     #[cfg_attr(feature = "musli", musli(skip_encoding_if = Option::is_none, default))]
     #[cfg_attr(
         feature = "serde",
         serde(skip_serializing_if = "Option::is_none", default)
     )]
-    pub relationships: Option<RelationshipMap>,
+    pub relationships: Option<RelationshipsMap>,
 }
 
 #[derive(Debug, Clone, Eq, PartialOrd, Ord, PartialEq)]
@@ -361,7 +376,7 @@ pub struct ResourceIdentifier {
 #[cfg_attr(feature = "serde", serde(transparent))]
 #[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
 #[cfg_attr(feature = "musli", musli(transparent))]
-pub struct RelationshipMap(
+pub struct RelationshipsMap(
     #[cfg_attr(feature = "musli", musli(with = musli::serde))]
     std::collections::HashMap<String, Relationship>,
 );
@@ -376,7 +391,7 @@ pub enum Relationship {
     Relation1toM { data: Vec<ResourceIdentifier> },
 }
 
-impl RelationshipMap {
+impl RelationshipsMap {
     pub fn new() -> Self {
         Self(std::collections::HashMap::new())
     }
@@ -421,13 +436,13 @@ impl RelationshipMap {
     }
 }
 
-impl FromIterator<(String, Relationship)> for RelationshipMap {
+impl FromIterator<(String, Relationship)> for RelationshipsMap {
     fn from_iter<T: IntoIterator<Item = (String, Relationship)>>(iter: T) -> Self {
         Self(std::collections::HashMap::from_iter(iter))
     }
 }
 
-impl std::ops::Index<&str> for RelationshipMap {
+impl std::ops::Index<&str> for RelationshipsMap {
     type Output = Relationship;
     fn index(&self, index: &str) -> &Self::Output {
         self.0.index(index)
@@ -485,10 +500,10 @@ where
 pub trait AsResource {
     fn ty() -> &'static str;
     fn resource_identifier(&self) -> ResourceIdentifier;
-    fn attributes(&self) -> Option<AttributeMap> {
+    fn attributes(&self) -> Option<AttributesMap> {
         None
     }
-    fn relationships(&self) -> Option<RelationshipMap> {
+    fn relationships(&self) -> Option<RelationshipsMap> {
         None
     }
 }
@@ -658,6 +673,7 @@ impl<STATUS: DataResponseStatus, R> From<Resource> for DataResponse<STATUS, R> {
             included: None,
             resource_ty: PhantomData,
             status: PhantomData,
+            links: None,
         }
     }
 }
@@ -667,12 +683,12 @@ impl<STATUS: DataResponseStatus, R> From<Resource> for DataResponse<STATUS, R> {
 #[cfg_attr(feature = "serde", serde(transparent))]
 #[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
 #[cfg_attr(feature = "musli", musli(transparent))]
-pub struct AttributeMap(
+pub struct AttributesMap(
     #[cfg_attr(feature = "musli", musli(with = musli::serde))]
     serde_json::Map<String, serde_json::Value>,
 );
 
-impl AttributeMap {
+impl AttributesMap {
     pub fn new() -> Self {
         Self(serde_json::Map::<String, serde_json::Value>::new())
     }
@@ -710,7 +726,7 @@ impl AttributeMap {
     }
 }
 
-impl From<std::collections::HashMap<String, serde_json::Value>> for AttributeMap {
+impl From<std::collections::HashMap<String, serde_json::Value>> for AttributesMap {
     fn from(val: std::collections::HashMap<String, serde_json::Value>) -> Self {
         let mut res = serde_json::Map::with_capacity(val.len());
         for (k, v) in val {
@@ -720,7 +736,7 @@ impl From<std::collections::HashMap<String, serde_json::Value>> for AttributeMap
     }
 }
 
-impl IntoIterator for AttributeMap {
+impl IntoIterator for AttributesMap {
     type Item = (String, serde_json::Value);
     type IntoIter = <serde_json::Map<String, serde_json::Value> as IntoIterator>::IntoIter;
     fn into_iter(self) -> Self::IntoIter {
@@ -728,14 +744,14 @@ impl IntoIterator for AttributeMap {
     }
 }
 
-impl From<serde_json::Map<String, serde_json::Value>> for AttributeMap {
+impl From<serde_json::Map<String, serde_json::Value>> for AttributesMap {
     fn from(val: serde_json::Map<String, serde_json::Value>) -> Self {
         Self(val)
     }
 }
 
 #[cfg(not(feature = "serde"))]
-impl FromIterator<(String, serde_json::Value)> for AttributeMap {
+impl FromIterator<(String, serde_json::Value)> for AttributesMap {
     fn from_iter<T: IntoIterator<Item = (String, serde_json::Value)>>(iter: T) -> Self {
         Self(serde_json::Map::<String, serde_json::Value>::from_iter(
             iter,
@@ -744,7 +760,7 @@ impl FromIterator<(String, serde_json::Value)> for AttributeMap {
 }
 
 #[cfg(not(feature = "serde"))]
-impl FromIterator<(String, serde_json::Value)> for AttributeMap {
+impl FromIterator<(String, serde_json::Value)> for AttributesMap {
     fn from_iter<T: IntoIterator<Item = (String, serde_json::Value)>>(iter: T) -> Self {
         Self(serde_json::Map::<String, serde_json::Value>::from_iter(
             iter,
@@ -753,7 +769,7 @@ impl FromIterator<(String, serde_json::Value)> for AttributeMap {
 }
 
 #[cfg(not(feature = "serde"))]
-impl FromIterator<(&'static str, serde_json::Value)> for AttributeMap {
+impl FromIterator<(&'static str, serde_json::Value)> for AttributesMap {
     fn from_iter<T: IntoIterator<Item = (&'static str, serde_json::Value)>>(iter: T) -> Self {
         Self(serde_json::Map::<String, serde_json::Value>::from_iter(
             iter.into_iter().map(|(k, v)| (String::from(k), v)),
@@ -763,7 +779,7 @@ impl FromIterator<(&'static str, serde_json::Value)> for AttributeMap {
 
 #[cfg(feature = "serde")]
 impl<S: serde::Serialize + for<'a> serde::Deserialize<'a>> FromIterator<(String, S)>
-    for AttributeMap
+    for AttributesMap
 {
     fn from_iter<T: IntoIterator<Item = (String, S)>>(iter: T) -> Self {
         Self(serde_json::Map::<String, serde_json::Value>::from_iter(
@@ -775,13 +791,87 @@ impl<S: serde::Serialize + for<'a> serde::Deserialize<'a>> FromIterator<(String,
 
 #[cfg(feature = "serde")]
 impl<S: serde::Serialize + for<'a> serde::Deserialize<'a>> FromIterator<(&'static str, S)>
-    for AttributeMap
+    for AttributesMap
 {
     fn from_iter<T: IntoIterator<Item = (&'static str, S)>>(iter: T) -> Self {
         Self(serde_json::Map::<String, serde_json::Value>::from_iter(
             iter.into_iter()
                 .map(|(k, v)| (String::from(k), serde_json::value::to_value(v).unwrap())),
         ))
+    }
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
+#[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
+#[cfg_attr(feature = "musli", musli(transparent))]
+pub struct LinksMap(
+    #[cfg_attr(feature = "musli", musli(with = musli::serde))]
+    std::collections::HashMap<String, String>,
+);
+
+impl LinksMap {
+    pub fn new() -> Self {
+        Self(std::collections::HashMap::<String, String>::new())
+    }
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self(std::collections::HashMap::<String, String>::with_capacity(
+            capacity,
+        ))
+    }
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.0.get(key)
+    }
+    pub fn insert(&mut self, key: String, value: String) -> Option<String> {
+        self.0.insert(key, value)
+    }
+    pub fn remove(&mut self, key: &str) -> Option<String> {
+        self.0.remove(key)
+    }
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub fn keys(&'_ self) -> std::collections::hash_map::Keys<'_, String, String> {
+        self.0.keys()
+    }
+    pub fn values(&'_ self) -> std::collections::hash_map::Values<'_, String, String> {
+        self.0.values()
+    }
+    pub fn iter(&'_ self) -> std::collections::hash_map::Iter<'_, String, String> {
+        self.0.iter()
+    }
+    pub fn iter_mut(&'_ mut self) -> std::collections::hash_map::IterMut<'_, String, String> {
+        self.0.iter_mut()
+    }
+}
+
+impl Extend<(String, String)> for LinksMap {
+    fn extend<T: IntoIterator<Item = (String, String)>>(&mut self, iter: T) {
+        self.0.extend(iter);
+    }
+}
+
+impl From<std::collections::HashMap<String, String>> for LinksMap {
+    fn from(val: std::collections::HashMap<String, String>) -> Self {
+        Self(val)
+    }
+}
+
+impl IntoIterator for LinksMap {
+    type Item = (String, String);
+    type IntoIter = <std::collections::HashMap<String, String> as IntoIterator>::IntoIter;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl FromIterator<(String, String)> for LinksMap {
+    fn from_iter<T: IntoIterator<Item = (String, String)>>(iter: T) -> Self {
+        Self(std::collections::HashMap::<String, String>::from_iter(iter))
     }
 }
 

@@ -220,7 +220,7 @@ struct AttributeData {
 impl AttributeData {
     #[cfg(feature = "json-schema")]
     fn into_json_schema_part(&self) -> proc_macro2::TokenStream {
-        let name= &self.name;
+        let name = &self.name;
         let value_type = &self.field_type;
         quote! {
             #name: #value_type::json_schema(generator),
@@ -391,7 +391,7 @@ impl RelationshipData {
         let resource_type = &self.name;
 
         if !self.to_many {
-            quote!{
+            quote! {
                     #name: {
                         "type": "object",
                         "properties": {
@@ -412,7 +412,7 @@ impl RelationshipData {
                     },
             }
         } else {
-            quote!{
+            quote! {
                     #name: {
                         "type": "object",
                         "properties": {
@@ -670,8 +670,8 @@ pub fn as_resource_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
             fn resource_identifier(&self) -> ::jayapi::ResourceIdentifier {
                 #expanded_resource_identifier_impl_body
             }
-            fn attributes(&self) -> ::std::option::Option<::jayapi::AttributeMap> {
-                let mut map = ::jayapi::AttributeMap::new();
+            fn attributes(&self) -> ::std::option::Option<::jayapi::AttributesMap> {
+                let mut map = ::jayapi::AttributesMap::new();
                 #(#expanded_attrs)*
                 if map.len() > 0 {
                     ::std::option::Option::Some(map)
@@ -679,8 +679,8 @@ pub fn as_resource_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                     ::std::option::Option::None
                 }
             }
-            fn relationships(&self) -> ::std::option::Option<::jayapi::RelationshipMap> {
-                let mut map = ::jayapi::RelationshipMap::new();
+            fn relationships(&self) -> ::std::option::Option<::jayapi::RelationshipsMap> {
+                let mut map = ::jayapi::RelationshipsMap::new();
                 #(#expanded_rels)*
                 if map.len() > 0 {
                     ::std::option::Option::Some(map)
@@ -880,9 +880,15 @@ pub fn json_schema_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
         }
     }
 
-    let attributes_schema_parts = attr_fields.into_iter().map(|a| a.into_json_schema_part()).collect::<Vec<_>>();
-    let relationships_schema_parts = relationships.into_iter().map(|a| a.into_json_schema_part()).collect::<Vec<_>>();
-    
+    let attributes_schema_parts = attr_fields
+        .into_iter()
+        .map(|a| a.into_json_schema_part())
+        .collect::<Vec<_>>();
+    let relationships_schema_parts = relationships
+        .into_iter()
+        .map(|a| a.into_json_schema_part())
+        .collect::<Vec<_>>();
+
     let expanded_impls = quote::quote! {
         #[automatically_derived]
         impl #generics ::schemars::JsonSchema for #struct_name #generics {
@@ -918,7 +924,6 @@ pub fn json_schema_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
         }
     };
 
-    
     proc_macro::TokenStream::from(expanded_impls)
 }
 
@@ -927,7 +932,7 @@ mod test {
     use darling::FromDeriveInput;
     use quote::{quote, ToTokens};
 
-    use crate::{as_resource_derive, from_resource_derive, DeriveFieldVariant, ResourceDerive};
+    use crate::{DeriveFieldVariant, ResourceDerive};
 
     #[test]
     fn minimal_from_resource() {
