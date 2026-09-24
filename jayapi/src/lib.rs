@@ -38,13 +38,17 @@ impl axum::response::IntoResponse for ErrorResponse {
     fn into_response(self) -> axum::response::Response {
         #[cfg(feature = "musli")]
         let res = (
-            self.status,
+            axum::http::StatusCode::from_u16(self.status).unwrap(),
             [(axum::http::header::CONTENT_TYPE, "application/json")],
             musli::json::to_string(&self).unwrap(),
         )
             .into_response();
         #[cfg(not(feature = "musli"))]
-        let res = (self.status, axum::Json(self)).into_response();
+        let res = (
+            axum::http::StatusCode::from_u16(self.status).unwrap(),
+            axum::Json(self),
+        )
+            .into_response();
 
         res
     }
@@ -115,7 +119,7 @@ impl ErrorObject {
 impl axum::response::IntoResponse for ErrorObject {
     fn into_response(self) -> axum::response::Response {
         ErrorResponse {
-            status: axum::http::StatusCode::from_u16(self.status).unwrap(),
+            status: self.status,
             errors: vec![self],
         }
         .into_response()
@@ -234,7 +238,11 @@ impl<STATUS: DataResponseStatus + Send + Sync, T> axum::response::IntoResponse
     for DataResponse<STATUS, T>
 {
     fn into_response(self) -> axum::response::Response {
-        (STATUS::status(), axum::Json(self)).into_response()
+        (
+            axum::http::StatusCode::from_u16(STATUS::status()).unwrap(),
+            axum::Json(self),
+        )
+            .into_response()
     }
 }
 
@@ -578,7 +586,7 @@ impl std::error::Error for ParsingError {}
 impl axum::response::IntoResponse for ParsingError {
     fn into_response(self) -> axum::response::Response {
         let res = ErrorResponse {
-            status: axum::http::StatusCode::BAD_REQUEST,
+            status: axum::http::StatusCode::BAD_REQUEST.into(),
             errors: vec![match &self {
                 Self::ValueParsingError {
                     on_field: _,
