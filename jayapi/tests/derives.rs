@@ -14,4 +14,8 @@ pub struct Test {
     relation: String,
 }
 
-pub fn main() {}
+pub fn main() {
+    let mut gen = schemars::SchemaGenerator::default();
+
+    dbg!(<Test as schemars::JsonSchema>::json_schema(&mut gen));
+}
