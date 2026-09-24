@@ -218,18 +218,21 @@ pub struct DataResponse<STATUS: DataResponseStatus, T = ()> {
 }
 
 impl<STATUS: DataResponseStatus, T> DataResponse<STATUS, T> {
-    pub fn include(&mut self, resource: impl AsResource) {
+    pub fn include(mut self, resource: impl AsResource) -> Self {
         let included: &mut Vec<_> = self.included.get_or_insert_default();
         included.push(resource.into());
+        self
     }
-    pub fn include_many<R: AsResource, I: IntoIterator<Item = R>>(&mut self, resources: I) {
+    pub fn include_many<R: AsResource, I: IntoIterator<Item = R>>(mut self, resources: I) -> Self {
         let included: &mut Vec<_> = self.included.get_or_insert_default();
         let to_include = resources.into_iter().map(|r| r.into());
         included.extend(to_include);
+        self
     }
-    pub fn add_links<I: IntoIterator<Item = (String, String)>>(&mut self, links: I) {
+    pub fn add_links<I: IntoIterator<Item = (String, String)>>(mut self, links: I) -> Self {
         let map = self.links.get_or_insert(LinksMap::new());
         map.extend(links);
+        self
     }
 }
 
