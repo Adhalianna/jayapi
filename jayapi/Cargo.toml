@@ -1,0 +1,30 @@
+[package]
+name = "jayapi"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = ["aide", "anyhow", "serde", "musli", "derive"]
+musli = ["dep:musli"]
+serde = ["dep:serde"]
+aide = ["dep:aide", "serde", "dep:schemars", "json-schema"]
+anyhow = ["dep:anyhow"]
+derive= ["dep:jayapi-derive"]
+diagnostics = ["jayapi-derive/diagnostics"]
+json-schema = ["dep:schemars", "jayapi-derive/json-schema"]
+axum = ["dep:axum"]
+
+[dependencies]
+axum = { version = "0.8.9", optional = true }
+aide = { version = "0.15.1", features = ["axum", "macros"], optional = true }
+serde = { version = "1.0", optional = true }
+serde_json = { version = "1.0" }
+anyhow = { version = "1.0", optional = true }
+musli = { version = "0.0.131", features = ["json", "serde", "value"], optional = true }
+jayapi-derive = { path = "../jayapi-derive", optional = true }
+schemars = { version = "0.9", optional = true }
+
+[dev-dependencies]
+trybuild = { version = "*" }

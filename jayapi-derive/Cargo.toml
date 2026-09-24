@@ -1,0 +1,17 @@
+[package]
+name = "jayapi-derive"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+diagnostics = [ "darling/diagnostics", "syn/extra-traits" ]
+json-schema = []
+
+[dependencies]
+darling ={ version = "0.21", features = ["suggestions"]}
+syn = { version = "2.0.89", features = ["full", "parsing"]}
+quote = { version = "1.0.37" }
+proc-macro2 = { version = "1.0" }
+
+[lib]
+proc-macro = true
