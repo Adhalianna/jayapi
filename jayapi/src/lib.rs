@@ -289,14 +289,16 @@ impl<R: AsResource, STATUS: DataResponseStatus> From<R> for DataResponse<STATUS,
     }
 }
 
-impl<R: AsResource, STATUS: DataResponseStatus> From<Vec<R>> for DataResponse<STATUS, Vec<R>> {
-    fn from(value: Vec<R>) -> Self {
+impl<R: AsResource, STATUS: DataResponseStatus, I: IntoIterator<Item = R>> From<I>
+    for DataResponse<STATUS, Vec<R>>
+{
+    fn from(value: I) -> Self {
         Self {
             data: SingleOrCollection::from_iter(value),
-            status: PhantomData,
-            resource_ty: PhantomData,
             included: None,
             links: None,
+            status: PhantomData,
+            resource_ty: PhantomData,
         }
     }
 }
