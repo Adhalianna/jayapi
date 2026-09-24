@@ -9,7 +9,7 @@ json-schema = []
 
 [dependencies]
 darling ={ version = "0.21", features = ["suggestions"]}
-syn = { version = "2.0.89", features = ["full", "parsing"]}
+syn = { version = "2.0.89", features = ["full", "parsing", "visit-mut"]}
 quote = { version = "1.0.37" }
 proc-macro2 = { version = "1.0" }
 

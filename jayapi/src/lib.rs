@@ -286,6 +286,18 @@ impl<R: AsResource, STATUS: DataResponseStatus> From<R> for DataResponse<STATUS,
     }
 }
 
+impl<R: AsResource, STATUS: DataResponseStatus> From<Vec<R>> for DataResponse<STATUS, Vec<R>> {
+    fn from(value: Vec<R>) -> Self {
+        Self {
+            data: SingleOrCollection::from_iter(value),
+            status: PhantomData,
+            resource_ty: PhantomData,
+            included: None,
+            links: None,
+        }
+    }
+}
+
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(untagged))]

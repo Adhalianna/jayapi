@@ -222,8 +222,10 @@ impl AttributeData {
     fn into_json_schema_part(&self) -> proc_macro2::TokenStream {
         let name = &self.name;
         let value_type = &self.field_type;
+        let value_type = quote! { #value_type };
+
         quote! {
-            #name: #value_type::json_schema(generator),
+            #name: <#value_type as ::schemars::JsonSchema>::json_schema(generator),
         }
     }
     fn into_as_resource_tokens(&self) -> proc_macro2::TokenStream {

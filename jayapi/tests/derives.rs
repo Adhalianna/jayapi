@@ -5,6 +5,9 @@ pub struct Test {
     #[jayapi(id)]
     id: String,
     attribute: String,
+    second_attribute: Option<String>,
+    #[jayapi(attribute)]
+    third_attribute: Vec<u16>,
     #[jayapi(relationship(to_many))]
     relations: Vec<String>,
     #[jayapi(relationship(resource_type = "test_resource"))]
