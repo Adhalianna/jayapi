@@ -12,10 +12,12 @@ pub struct Test {
     relations: Vec<String>,
     #[jayapi(relationship(resource_type = "test_resource"))]
     relation: String,
+    #[jayapi(relationship(name = "optional", optional, resource_type = "another_test_resource"))]
+    optional_relation: Option<String>,
 }
 
 pub fn main() {
     let mut gen = schemars::SchemaGenerator::default();
 
-    dbg!(<Test as schemars::JsonSchema>::json_schema(&mut gen));
+    let _schema = dbg!(<Test as schemars::JsonSchema>::json_schema(&mut gen));
 }

@@ -364,13 +364,13 @@ impl RelationshipFieldAttr {
         }
 
         if self.optional.is_present() && self.to_many.is_present() {
-            panic!("\"to_many\" relationships cannot be marked as optional, only 1-to-1 relations can be wrapped in Option");
+            panic!("\"to_many\" relationships cannot be marked as optional, only 1-to-1 relations can be wrapped in std::option::Option");
         }
 
         RelationshipData {
             name: name.clone(),
             field: field_ident,
-            resource_type: self.resource_type.to_owned().unwrap_or(name),
+            resource_type: self.resource_type.clone().unwrap_or(name),
             to_many: self.to_many.is_present(),
             optional: self.optional.is_present(),
             parse_method: self.parse_method.to_owned().unwrap_or(
@@ -399,30 +399,9 @@ impl RelationshipData {
     #[cfg(feature = "json-schema")]
     fn into_json_schema_part(&self) -> proc_macro2::TokenStream {
         let name = &self.name;
-        let resource_type = &self.name;
+        let resource_type = &self.resource_type;
 
-        if !self.to_many {
-            quote! {
-                    #name: {
-                        "type": "object",
-                        "properties": {
-                            "data": {
-                                "type": "object",
-                                "properties": {
-                                    "type": {
-                                        "const": #resource_type,
-                                    },
-                                    "id": {
-                                        "type": "string",
-                                    },
-                                },
-                                "required": [ "type", "id" ],
-                                "additionalProperties": false,
-                            }
-                        }
-                    },
-            }
-        } else {
+        if self.to_many {
             quote! {
                     #name: {
                         "type": "object",
@@ -442,6 +421,48 @@ impl RelationshipData {
                                     "required": ["type", "id"],
                                     "additionalProperties": false,
                                 }
+                            }
+                        }
+                    },
+            }
+        } else if self.optional {
+            quote! {
+                    #name: {
+                        "type": [ "object", "null" ],
+                        "properties": {
+                            "data": {
+                                    "type": "object",
+                                    "properties": {
+                                        "type": {
+                                            "const": #resource_type,
+                                        },
+                                        "id": {
+                                            "type": "string",
+                                        },
+                                    },
+                                    "required": ["type", "id"],
+                                    "additionalProperties": false,
+                            }
+                        }
+                    },
+            }
+        } else {
+            quote! {
+                    #name: {
+                        "type": "object",
+                        "properties": {
+                            "data": {
+                                    "type": "object",
+                                    "properties": {
+                                        "type": {
+                                            "const": #resource_type,
+                                        },
+                                        "id": {
+                                            "type": "string",
+                                        },
+                                    },
+                                    "required": ["type", "id"],
+                                    "additionalProperties": false,
                             }
                         }
                     },
@@ -504,9 +525,14 @@ impl RelationshipData {
     }
     fn into_from_resource_tokens_storage_var(&self) -> proc_macro2::TokenStream {
         let var_name = &self.storage_var();
-
-        quote! {
-            let mut #var_name = ::std::default::Default::default();
+        if self.optional {
+            quote! {
+                let mut #var_name = ::std::option::Option::None;
+            }
+        } else {
+            quote! {
+                let mut #var_name = ::std::default::Default::default();
+            }
         }
     }
     fn into_from_resource_tokens_match_arm(&self) -> proc_macro2::TokenStream {
