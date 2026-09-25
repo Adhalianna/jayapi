@@ -234,6 +234,14 @@ impl<STATUS: DataResponseStatus, T> DataResponse<STATUS, T> {
         map.extend(links);
         self
     }
+    /// # Performance
+    /// Underlying structure is just a `Vec` so the inclusion check performs a linear search.
+    pub fn is_included(&self, resource_iden: &ResourceIdentifier) -> bool {
+        match &self.included {
+            None => false,
+            Some(included) => included.iter().find(|r| *r == resource_iden).is_some(),
+        }
+    }
 }
 
 #[cfg(all(not(feature = "musli"), feature = "axum"))]
@@ -396,6 +404,18 @@ pub struct ResourceIdentifier {
     pub id: String,
 }
 
+impl PartialEq<Resource> for ResourceIdentifier {
+    fn eq(&self, other: &Resource) -> bool {
+        self.r#type == other.r#type && self.id == other.id
+    }
+}
+
+impl PartialEq<ResourceIdentifier> for Resource {
+    fn eq(&self, other: &ResourceIdentifier) -> bool {
+        self.r#type == other.r#type && self.id == other.id
+    }
+}
+
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
@@ -535,6 +555,13 @@ pub trait AsResource {
 
 pub trait FromResource: TryFrom<Resource> {}
 impl<T> FromResource for T where T: TryFrom<Resource> {}
+
+impl<T: AsResource> From<T> for ResourceIdentifier {
+    #[inline]
+    fn from(value: T) -> Self {
+        value.resource_identifier()
+    }
+}
 
 #[derive(Debug, Clone)]
 #[non_exhaustive]
