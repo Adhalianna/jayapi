@@ -137,18 +137,27 @@ impl IdFieldAttr {
                 syn::Path::from_string("::std::string::ToString::to_string").unwrap()
             }),
             resource_type: resource_type.clone(),
+            field_type: field_type.clone(),
         }
     }
 }
 
 struct IdData {
     field: IndexOrField,
+    field_type: syn::Type,
     resource_type: String,
     parse_method: syn::Path,
     to_string_method: syn::Path,
 }
 
 impl IdData {
+    #[cfg(feature = "json-schema")]
+    fn into_id_type_json_schema_part(&self) -> proc_macro2::TokenStream {
+        let value_type = &self.field_type;
+        let value_type = quote! { #value_type };
+
+        quote! {<#value_type as ::schemars::JsonSchema>::json_schema(generator)}
+    }
     fn into_as_resource_tokens_identifier_impl_body(&self) -> proc_macro2::TokenStream {
         let resource_type = &self.resource_type;
         let id_field = &self.field;
@@ -847,6 +856,7 @@ pub fn json_schema_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
 
     let mut relationships: Vec<RelationshipData> = Vec::new();
     let mut attr_fields: Vec<AttributeData> = Vec::new();
+    let mut id_field: Option<IdData> = None;
 
     let struct_fields = input
         .data
@@ -867,8 +877,9 @@ pub fn json_schema_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
             }
         };
         match field_variant {
-            DeriveFieldVariant::Id(_) => {
-                continue;
+            DeriveFieldVariant::Id(id_attr) => {
+                id_field =
+                    Some(id_attr.into_data(field_or_idx.clone(), &field.ty, resource_type.clone()));
             }
             DeriveFieldVariant::Attribute(attribute_attr) => {
                 attr_fields.push(attribute_attr.into_data(field_or_idx.clone(), &field.ty));
@@ -890,6 +901,9 @@ pub fn json_schema_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
         .into_iter()
         .map(|a| a.into_json_schema_part())
         .collect::<Vec<_>>();
+    let id_schema_part = id_field
+        .map(|part| part.into_id_type_json_schema_part())
+        .unwrap_or_else(|| quote! {{ "type": "string", }});
 
     let expanded_impls = quote::quote! {
         #[automatically_derived]
@@ -901,9 +915,7 @@ pub fn json_schema_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                 ::schemars::json_schema!({
                     "type": "object",
                     "properties": {
-                        "id": {
-                            "type": "string",
-                        },
+                        "id": #id_schema_part,
                         "type": {
                             "type": "string",
                         },
@@ -920,7 +932,7 @@ pub fn json_schema_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                             }
                         }
                     },
-                    "required": ["type", "id", "attributes"]
+                    "required": ["type", "attributes"]
                 })
             }
         }

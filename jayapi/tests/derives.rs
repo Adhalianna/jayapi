@@ -3,7 +3,7 @@ use jayapi::{AsResource, FromResource, JsonSchema};
 #[derive(FromResource, AsResource, JsonSchema)]
 pub struct Test {
     #[jayapi(id)]
-    id: String,
+    id: u32,
     attribute: String,
     second_attribute: Option<String>,
     #[jayapi(attribute)]
