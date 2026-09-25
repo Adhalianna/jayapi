@@ -22,6 +22,8 @@ std::compile_err!("either 'musli' or 'serde' feature must be enabled");
 
 pub type Error = ErrorResponse;
 pub type Data<STATUS, R> = DataResponse<STATUS, R>;
+pub type DataOk<R> = DataResponse<Ok, R>;
+pub type DataCreated<R> = DataResponse<Created, R>;
 
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
