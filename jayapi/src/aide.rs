@@ -89,7 +89,12 @@ impl<R: schemars::JsonSchema> aide::OperationInput for crate::extract::ResourceR
         let mut content = aide::openapi::MediaType::default();
 
         content.schema = Some(aide::openapi::SchemaObject {
-            json_schema: R::json_schema(&mut ctx.schema),
+            json_schema: schemars::json_schema!({
+                "type": "object",
+                "properties": {
+                    "data": R::json_schema(&mut ctx.schema)
+                }
+            }),
             external_docs: None,
             example: None,
         });

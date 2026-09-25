@@ -85,7 +85,7 @@ impl<STATUS: DataResponseStatus, R: schemars::JsonSchema + AsResource> schemars:
                 "data": R::json_schema(generator),
                 "included": {
                     "type": "array",
-                    "items": R::json_schema(generator)
+                    "items": crate::Resource::json_schema(generator)
                 },
                 "links": {
                     "type": "object"
