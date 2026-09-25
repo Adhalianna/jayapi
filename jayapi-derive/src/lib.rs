@@ -918,6 +918,7 @@ pub fn json_schema_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                         "id": #id_schema_part,
                         "type": {
                             "type": "string",
+                            "const": #resource_type
                         },
                         "attributes": {
                             "type": "object",
