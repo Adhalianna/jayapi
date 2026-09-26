@@ -3,7 +3,8 @@ use std::marker::PhantomData;
 
 #[cfg(feature = "axum")]
 use axum::body::Bytes;
-trait ResourceTypeList {
+
+pub trait ResourceTypeList {
     fn types() -> Vec<&'static str>;
 }
 macro_rules! impl_resource_type_list {
@@ -50,7 +51,7 @@ impl<R> ExtractDataRequest<R, Any> {
         &self,
     ) -> Result<Option<Vec<R1>>, <R1 as TryFrom<crate::LocalResource>>::Error>
     where
-        R1: crate::FromLocalResource + crate::ResourceType,
+        R1: TryFrom<crate::LocalResource> + crate::ResourceType,
     {
         let parsed = self.included.as_ref().map(|v| {
             v.iter()
@@ -77,13 +78,12 @@ impl<R> ExtractDataRequest<R, Any> {
     }
 }
 
-#[allow(private_bounds)]
 impl<R, L: ResourceTypeList> ExtractDataRequest<R, L> {
     pub fn extract_included<R1>(
         &self,
     ) -> Result<Option<Vec<R1>>, <R1 as TryFrom<crate::LocalResource>>::Error>
     where
-        R1: crate::FromLocalResource + crate::ResourceType,
+        R1: TryFrom<crate::LocalResource> + crate::ResourceType,
     {
         #[cfg(debug_assertions)]
         {
