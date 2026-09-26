@@ -27,6 +27,7 @@ struct DeriveField {
     ty: syn::Type,
     skip: darling::util::Flag,
     id: Option<SpannedValue<Override<IdFieldAttr>>>,
+    lid: Option<SpannedValue<Override<LidFieldAttr>>>,
     attribute: Option<SpannedValue<Override<AttributeFieldAttr>>>,
     relationship: Option<SpannedValue<Override<RelationshipFieldAttr>>>,
 }
@@ -51,20 +52,58 @@ impl TryFrom<&DeriveField> for DeriveFieldVariant {
                 )
                 .with_span(&v.span())
                 .at("attribute"));
-            } else {
-                unreachable!()
+            }
+        }
+        if (value.lid.is_some() && value.attribute.is_some())
+            || (value.lid.is_some() && value.relationship.is_some())
+        {
+            if let Some(v) = value.id.as_ref() {
+                return Err(darling::Error::custom(
+                    "the 'lid' field cannot be also an 'attribute' nor 'relationship'",
+                )
+                .with_span(&v.span())
+                .at("lid"));
             }
         }
         if value.skip.is_present() {
             return Ok(Self::Skip);
         }
         if let Some(id) = &value.id {
+            if let Some(lid) = &value.lid {
+                return match (id.as_ref(), lid.as_ref()) {
+                    (Override::Inherit, Override::Inherit) => Ok(Self::IdAndLid(
+                        SpannedValue::new(IdFieldAttr::default(), id.span()),
+                        SpannedValue::new(LidFieldAttr::default(), lid.span()),
+                    )),
+                    (Override::Inherit, Override::Explicit(lidv)) => Ok(Self::IdAndLid(
+                        SpannedValue::new(IdFieldAttr::default(), id.span()),
+                        SpannedValue::new(lidv.clone(), lid.span()),
+                    )),
+                    (Override::Explicit(idv), Override::Inherit) => Ok(Self::IdAndLid(
+                        SpannedValue::new(idv.clone(), id.span()),
+                        SpannedValue::new(LidFieldAttr::default(), lid.span()),
+                    )),
+                    (Override::Explicit(idv), Override::Explicit(lidv)) => Ok(Self::IdAndLid(
+                        SpannedValue::new(idv.clone(), id.span()),
+                        SpannedValue::new(lidv.clone(), lid.span()),
+                    )),
+                };
+            }
             return match id.as_ref() {
                 Override::Inherit => Ok(Self::Id(SpannedValue::new(
                     IdFieldAttr::default(),
                     id.span(),
                 ))),
                 Override::Explicit(v) => Ok(Self::Id(SpannedValue::new(v.clone(), id.span()))),
+            };
+        }
+        if let Some(lid) = &value.lid {
+            return match lid.as_ref() {
+                Override::Inherit => Ok(Self::Lid(SpannedValue::new(
+                    LidFieldAttr::default(),
+                    lid.span(),
+                ))),
+                Override::Explicit(v) => Ok(Self::Lid(SpannedValue::new(v.clone(), lid.span()))),
             };
         }
         if let Some(attr) = &value.attribute {
@@ -105,6 +144,8 @@ impl TryFrom<&DeriveField> for DeriveFieldVariant {
 enum DeriveFieldVariant {
     Skip,
     Id(SpannedValue<IdFieldAttr>),
+    Lid(SpannedValue<LidFieldAttr>),
+    IdAndLid(SpannedValue<IdFieldAttr>, SpannedValue<LidFieldAttr>),
     Attribute(SpannedValue<AttributeFieldAttr>),
     Relationship(SpannedValue<RelationshipFieldAttr>),
 }
@@ -179,6 +220,81 @@ impl IdData {
                 on_field: "id".to_owned(),
                 err: e.to_string(),
             })?,
+        }
+    }
+}
+
+#[derive(darling::FromMeta, Clone, Debug, Default)]
+#[darling(default)]
+struct LidFieldAttr {
+    #[darling(rename = "parse_with")]
+    parse_method: Option<syn::Path>,
+    #[darling(rename = "to_string_with")]
+    to_string_method: Option<syn::Path>,
+}
+
+impl LidFieldAttr {
+    fn into_data(
+        &self,
+        field_ident: IndexOrField,
+        field_type: &syn::Type,
+        resource_type: String,
+    ) -> LidData {
+        LidData {
+            field: field_ident,
+            parse_method: self.parse_method.to_owned().unwrap_or_else(|| {
+                syn::Path::from_string(
+                    &("str::parse::<".to_owned() + &field_type.to_token_stream().to_string() + ">"),
+                )
+                .unwrap()
+            }),
+            to_string_method: self.to_string_method.to_owned().unwrap_or_else(|| {
+                syn::Path::from_string("::std::string::ToString::to_string").unwrap()
+            }),
+            resource_type: resource_type.clone(),
+            field_type: field_type.clone(),
+        }
+    }
+}
+
+struct LidData {
+    field: IndexOrField,
+    field_type: syn::Type,
+    resource_type: String,
+    parse_method: syn::Path,
+    to_string_method: syn::Path,
+}
+
+impl LidData {
+    #[cfg(feature = "json-schema")]
+    fn into_id_type_json_schema_part(&self) -> proc_macro2::TokenStream {
+        let value_type = &self.field_type;
+        let value_type = quote! { #value_type };
+
+        quote! {<#value_type as ::schemars::JsonSchema>::json_schema(generator)}
+    }
+    fn into_as_local_resource_tokens_identifier_impl_body(&self) -> proc_macro2::TokenStream {
+        let resource_type = &self.resource_type;
+        let lid_field = &self.field;
+        let to_string_method = &self.to_string_method;
+
+        quote! {
+            ::std::option::Option::Some(::jayapi::LocalResourceIdentifier {
+                 r#type: #resource_type.to_owned(),
+                 lid: #to_string_method(&self.#lid_field),
+            })
+        }
+    }
+    fn into_from_local_resource_tokens(&self) -> proc_macro2::TokenStream {
+        let parse_method = &self.parse_method;
+        let lid_field = &self.field;
+        let resource_type = &self.resource_type;
+
+        quote! {
+            #lid_field: resource.lid.as_ref().map(|lid| #parse_method(lid).map_err(|e| ::jayapi::ParsingError::ValueParsingError {
+                on_field: "lid".to_owned(),
+                err: e.to_string(),
+            })).ok_or_else(|| ::jayapi::ParsingError::LidRequired{ resource_type: #resource_type.to_owned() })??,
         }
     }
 }
@@ -517,6 +633,54 @@ impl RelationshipData {
             }
         }
     }
+    fn into_as_local_resource_tokens(&self) -> proc_macro2::TokenStream {
+        let name = &self.name;
+        let resource_type = &self.resource_type;
+        let to_string_method = &self.to_string_method;
+        let field = &self.field;
+
+        if self.to_many {
+            quote! {
+                map.insert(
+                    #name.to_owned(),
+                    ::jayapi::LocalOrGlobalRelationship::Local(::jayapi::LocalRelationship::Relation1toM {
+                        data: self.#field.iter().map(|item| {
+                            ::jayapi::LocalResourceIdentifier{
+                                r#type: #resource_type.to_owned(),
+                                lid: #to_string_method(item)
+                            }
+                        }).collect(),
+                    })
+                );
+            }
+        } else if self.optional {
+            quote! {
+                if let ::std::option::Option::Some(id) = &self.#field {
+                    map.insert(
+                        #name.to_owned(),
+                        ::jayapi::LocalOrGlobalRelationship::Local(::jayapi::LocalRelationship::Relation1to1 {
+                            data: ::jayapi::LocalResourceIdentifier {
+                                r#type: #resource_type.to_owned(),
+                                lid: #to_string_method(id),
+                            }
+                        })
+                    );
+                }
+            }
+        } else {
+            quote! {
+                map.insert(
+                    #name.to_owned(),
+                    ::jayapi::LocalOrGlobalRelationship::Local(::jayapi::LocalRelationship::Relation1to1 {
+                        data: ::jayapi::LocalResourceIdentifier {
+                            r#type: #resource_type.to_owned(),
+                            lid: #to_string_method(&self.#field),
+                        }
+                    })
+                );
+            }
+        }
+    }
     fn storage_var(&self) -> syn::Ident {
         syn::Ident::new(
             &("__".to_owned() + &self.field.to_token_stream().to_string()),
@@ -598,6 +762,116 @@ impl RelationshipData {
             }
         }
     }
+    fn into_from_local_resource_tokens_match_arm(&self) -> proc_macro2::TokenStream {
+        let relation_name = &self.name;
+        let var_name = &self.storage_var();
+        let parse_method = &self.parse_method;
+
+        if self.to_many {
+            quote! {
+                #relation_name => {
+                    match v {
+                        ::jayapi::LocalOrGlobalRelationship::Local(rel) => match rel {
+                            ::jayapi::LocalRelationship::Relation1toM { data: data } => {
+                                #var_name = data.iter().map(|item| #parse_method(&item.lid).map_err(|e| ::jayapi::ParsingError::ValueParsingError {
+                                    err: e.to_string(),
+                                    on_field: #relation_name.to_owned(),
+                                })).collect::<Result<_, ::jayapi::ParsingError>>()?;
+                            },
+                            _ => {
+                                return Err(::jayapi::ParsingError::WrongRelationshipKind {
+                                    relationship: #relation_name.to_owned(),
+                                });
+                            }
+                        },
+                        ::jayapi::LocalOrGlobalRelationship::Global(rel) => match rel {
+                            ::jayapi::Relationship::Relation1toM { data: data } => {
+                                #var_name = data.iter().map(|item| #parse_method(&item.id).map_err(|e| ::jayapi::ParsingError::ValueParsingError {
+                                    err: e.to_string(),
+                                    on_field: #relation_name.to_owned(),
+                                })).collect::<Result<_, ::jayapi::ParsingError>>()?;
+                            },
+                            _ => {
+                                return Err(::jayapi::ParsingError::WrongRelationshipKind {
+                                    relationship: #relation_name.to_owned(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        } else if self.optional {
+            quote! {
+                #relation_name => {
+                    match v {
+                        ::jayapi::LocalOrGlobalRelationship::Global(rel) => match rel {
+                            ::jayapi::Relationship::Relation1to1 { data: data } => {
+                                #var_name = ::std::option::Option::Some(
+                                    #parse_method(&data.id).map_err(|e| ::jayapi::ParsingError::ValueParsingError {
+                                        err: e.to_string(),
+                                        on_field: #relation_name.to_owned(),
+                                    })?
+                                );
+                            },
+                            _ => {
+                                return Err(::jayapi::ParsingError::WrongRelationshipKind {
+                                    relationship: #relation_name.to_owned(),
+                                });
+                            }
+                        },
+                        ::jayapi::LocalOrGlobalRelationship::Local(rel) => match rel {
+                            ::jayapi::LocalRelationship::Relation1to1 { data: data } => {
+                                #var_name = ::std::option::Option::Some(
+                                    #parse_method(&data.lid).map_err(|e| ::jayapi::ParsingError::ValueParsingError {
+                                        err: e.to_string(),
+                                        on_field: #relation_name.to_owned(),
+                                    })?
+                                );
+                            }
+                            _ => {
+                                return Err(::jayapi::ParsingError::WrongRelationshipKind {
+                                    relationship: #relation_name.to_owned(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            quote! {
+                #relation_name => {
+                    match v {
+                        ::jayapi::LocalOrGlobalRelationship::Local(rel) => match rel {
+                            ::jayapi::LocalRelationship::Relation1to1 { data: data } => {
+                                #var_name = #parse_method(&data.lid).map_err(|e| ::jayapi::ParsingError::ValueParsingError {
+                                    err: e.to_string(),
+                                    on_field: #relation_name.to_owned(),
+                                })?;
+                            },
+                            _ => {
+                                return Err(::jayapi::ParsingError::WrongRelationshipKind {
+                                    relationship: #relation_name.to_owned(),
+                                });
+                            }
+                        },
+                        ::jayapi::LocalOrGlobalRelationship::Global(rel) => match rel {
+                            ::jayapi::Relationship::Relation1to1 { data: data } => {
+                                #var_name = #parse_method(&data.id).map_err(|e| ::jayapi::ParsingError::ValueParsingError {
+                                    err: e.to_string(),
+                                    on_field: #relation_name.to_owned(),
+                                })?;
+                            },
+                            _ => {
+                                return Err(::jayapi::ParsingError::WrongRelationshipKind {
+                                    relationship: #relation_name.to_owned(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     fn into_from_resource_tokens_var_assign(&self) -> proc_macro2::TokenStream {
         let field = &self.field;
         let var_name = &self.storage_var();
@@ -621,6 +895,40 @@ impl quote::ToTokens for IndexOrField {
             Self::Field(field) => field.to_tokens(tokens),
         }
     }
+}
+
+#[proc_macro_derive(ResourceType, attributes(jayapi))]
+pub fn resource_type_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input: syn::DeriveInput = match syn::parse2(input.into()) {
+        Ok(input) => input,
+        Err(err) => {
+            return err.to_compile_error().into();
+        }
+    };
+    let input = match ResourceDerive::from_derive_input(&input) {
+        Ok(input) => input,
+        Err(err) => {
+            return err.write_errors().into();
+        }
+    };
+
+    let struct_name = &input.ident;
+    let generics = &input.generics;
+
+    let resource_type = input
+        .resource_type
+        .unwrap_or_else(|| input.ident.to_string());
+
+    let expanded_impl = quote::quote! {
+        #[automatically_derived]
+        impl #generics ::jayapi::ResourceType for #struct_name #generics {
+            fn ty() -> &'static str {
+                #resource_type
+            }
+         }
+    };
+
+    proc_macro::TokenStream::from(expanded_impl)
 }
 
 #[proc_macro_derive(AsResource, attributes(jayapi))]
@@ -668,7 +976,7 @@ pub fn as_resource_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
             }
         };
         match field_variant {
-            DeriveFieldVariant::Id(id_attr) => {
+            DeriveFieldVariant::Id(id_attr) | DeriveFieldVariant::IdAndLid(id_attr, _) => {
                 resource_id_field =
                     Some(id_attr.into_data(field_or_idx.clone(), &field.ty, resource_type.clone()));
             }
@@ -677,6 +985,9 @@ pub fn as_resource_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
             }
             DeriveFieldVariant::Relationship(rel_attr) => {
                 relationships.push(rel_attr.into_data(field_or_idx.clone(), &field.ty));
+            }
+            DeriveFieldVariant::Lid(_) => {
+                continue;
             }
             DeriveFieldVariant::Skip => {
                 continue;
@@ -701,9 +1012,6 @@ pub fn as_resource_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
     let expanded_impls = quote::quote! {
         #[automatically_derived]
         impl #generics ::jayapi::AsResource for #struct_name #generics {
-            fn ty() -> &'static str {
-                #resource_type
-            }
             fn resource_identifier(&self) -> ::jayapi::ResourceIdentifier {
                 #expanded_resource_identifier_impl_body
             }
@@ -728,6 +1036,120 @@ pub fn as_resource_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
          }
     };
 
+    proc_macro::TokenStream::from(expanded_impls)
+}
+
+#[proc_macro_derive(AsLocalResource, attributes(jayapi))]
+pub fn as_local_resource_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input: syn::DeriveInput = match syn::parse2(input.into()) {
+        Ok(input) => input,
+        Err(err) => {
+            return err.to_compile_error().into();
+        }
+    };
+    let input = match ResourceDerive::from_derive_input(&input) {
+        Ok(input) => input,
+        Err(err) => {
+            return err.write_errors().into();
+        }
+    };
+
+    let struct_name = &input.ident;
+    let generics = &input.generics;
+
+    let resource_type = input
+        .resource_type
+        .unwrap_or_else(|| input.ident.to_string());
+
+    let mut resource_lid_field: Option<LidData> = None;
+    let mut relationships: Vec<RelationshipData> = Vec::new();
+    let mut attr_fields: Vec<AttributeData> = Vec::new();
+
+    let struct_fields = input
+        .data
+        .take_struct()
+        .expect("only structs are supported as input");
+
+    for (idx, field) in struct_fields.iter().enumerate() {
+        let field_or_idx = field
+            .ident
+            .clone()
+            .map(IndexOrField::Field)
+            .unwrap_or(IndexOrField::Index(syn::Index::from(idx)));
+
+        let field_variant: DeriveFieldVariant = match field.try_into() {
+            Ok(field) => field,
+            Err(err) => {
+                return err.write_errors().into();
+            }
+        };
+        match field_variant {
+            DeriveFieldVariant::Lid(lid_attr) | DeriveFieldVariant::IdAndLid(_, lid_attr) => {
+                resource_lid_field = Some(lid_attr.into_data(
+                    field_or_idx.clone(),
+                    &field.ty,
+                    resource_type.clone(),
+                ));
+            }
+            DeriveFieldVariant::Attribute(attribute_attr) => {
+                attr_fields.push(attribute_attr.into_data(field_or_idx.clone(), &field.ty));
+            }
+            DeriveFieldVariant::Relationship(rel_attr) => {
+                relationships.push(rel_attr.into_data(field_or_idx.clone(), &field.ty));
+            }
+            DeriveFieldVariant::Id(_) => {
+                continue;
+            }
+            DeriveFieldVariant::Skip => {
+                continue;
+            }
+        }
+    }
+
+    let mut expanded_attrs = Vec::with_capacity(attr_fields.len());
+    for attr in attr_fields {
+        expanded_attrs.push(attr.into_as_resource_tokens());
+    }
+
+    let mut expanded_rels = Vec::with_capacity(relationships.len());
+    for rel in relationships {
+        expanded_rels.push(rel.into_as_local_resource_tokens());
+    }
+
+    let expanded_resource_identifier_impl_body = resource_lid_field
+        .map(|lid_data| lid_data.into_as_local_resource_tokens_identifier_impl_body())
+        .unwrap_or_else(|| {
+            quote! {
+                None
+            }
+        });
+
+    let expanded_impls = quote::quote! {
+        #[automatically_derived]
+        impl #generics ::jayapi::AsLocalResource for #struct_name #generics {
+            fn local_resource_identifier(&self) -> ::std::option::Option<::jayapi::LocalResourceIdentifier> {
+                #expanded_resource_identifier_impl_body
+            }
+            fn attributes(&self) -> ::std::option::Option<::jayapi::AttributesMap> {
+                let mut map = ::jayapi::AttributesMap::new();
+                #(#expanded_attrs)*
+                if map.len() > 0 {
+                    ::std::option::Option::Some(map)
+                } else {
+                    ::std::option::Option::None
+                }
+            }
+            fn relationships(&self) -> ::std::option::Option<::jayapi::LocalRelationshipsMap> {
+                let mut map = ::jayapi::LocalRelationshipsMap::new();
+                #(#expanded_rels)*
+                if map.len() > 0 {
+                    ::std::option::Option::Some(map)
+                } else {
+                    ::std::option::Option::None
+                }
+            }
+         }
+    };
     proc_macro::TokenStream::from(expanded_impls)
 }
 
@@ -776,7 +1198,7 @@ pub fn from_resource_derive(input: proc_macro::TokenStream) -> proc_macro::Token
             }
         };
         match field_variant {
-            DeriveFieldVariant::Id(id_attr) => {
+            DeriveFieldVariant::Id(id_attr) | DeriveFieldVariant::IdAndLid(id_attr, _) => {
                 resource_id_field =
                     Some(id_attr.into_data(field_or_idx.clone(), &field.ty, resource_type.clone()));
             }
@@ -785,6 +1207,9 @@ pub fn from_resource_derive(input: proc_macro::TokenStream) -> proc_macro::Token
             }
             DeriveFieldVariant::Relationship(rel_attr) => {
                 relationships.push(rel_attr.into_data(field_or_idx.clone(), &field.ty))
+            }
+            DeriveFieldVariant::Lid(_) => {
+                continue;
             }
             DeriveFieldVariant::Skip => {
                 continue;
@@ -857,6 +1282,138 @@ pub fn from_resource_derive(input: proc_macro::TokenStream) -> proc_macro::Token
     proc_macro::TokenStream::from(expanded_impls)
 }
 
+#[proc_macro_derive(FromLocalResource, attributes(jayapi))]
+pub fn from_local_resource_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input: syn::DeriveInput = match syn::parse2(input.into()) {
+        Ok(input) => input,
+        Err(err) => {
+            return err.to_compile_error().into();
+        }
+    };
+    let input = match ResourceDerive::from_derive_input(&input) {
+        Ok(input) => input,
+        Err(err) => {
+            return err.write_errors().into();
+        }
+    };
+
+    let struct_name = &input.ident;
+    let generics = &input.generics;
+
+    let resource_type = input
+        .resource_type
+        .unwrap_or_else(|| input.ident.to_string());
+
+    let mut resource_lid_field: Option<LidData> = None;
+    let mut relationships: Vec<RelationshipData> = Vec::new();
+    let mut attr_fields: Vec<AttributeData> = Vec::new();
+
+    let struct_fields = input
+        .data
+        .take_struct()
+        .expect("only structs are supported as input");
+
+    for (idx, field) in struct_fields.iter().enumerate() {
+        let field_or_idx = field
+            .ident
+            .clone()
+            .map(IndexOrField::Field)
+            .unwrap_or(IndexOrField::Index(syn::Index::from(idx)));
+
+        let field_variant: DeriveFieldVariant = match field.try_into() {
+            Ok(field) => field,
+            Err(err) => {
+                return err.write_errors().into();
+            }
+        };
+        match field_variant {
+            DeriveFieldVariant::Lid(lid_attr) | DeriveFieldVariant::IdAndLid(_, lid_attr) => {
+                resource_lid_field = Some(lid_attr.into_data(
+                    field_or_idx.clone(),
+                    &field.ty,
+                    resource_type.clone(),
+                ));
+            }
+            DeriveFieldVariant::Attribute(attribute_attr) => {
+                attr_fields.push(attribute_attr.into_data(field_or_idx.clone(), &field.ty));
+            }
+            DeriveFieldVariant::Relationship(rel_attr) => {
+                relationships.push(rel_attr.into_data(field_or_idx.clone(), &field.ty))
+            }
+            DeriveFieldVariant::Id(_) => {
+                continue;
+            }
+            DeriveFieldVariant::Skip => {
+                continue;
+            }
+        }
+    }
+
+    let resource_id_field_tokens = if let Some(id_field) = resource_lid_field {
+        id_field.into_from_local_resource_tokens()
+    } else {
+        quote! { /* no id field specified */ }
+    };
+
+    let mut attrs_tmp_variables = Vec::with_capacity(attr_fields.len());
+    let mut attrs_parsing_match_arms = Vec::with_capacity(attr_fields.len());
+    let mut attrs_assign_to_field = Vec::with_capacity(attr_fields.len());
+
+    for attr in attr_fields {
+        attrs_tmp_variables.push(attr.into_from_resource_tokens_storage_var());
+        attrs_parsing_match_arms.push(attr.into_from_resource_tokens_match_arm());
+        attrs_assign_to_field.push(attr.into_from_resource_tokens_var_assign());
+    }
+
+    let mut rels_tmp_variables = Vec::with_capacity(relationships.len());
+    let mut rels_parsing_match_arms = Vec::with_capacity(relationships.len());
+    let mut rels_assign_to_field = Vec::with_capacity(relationships.len());
+
+    for rel in relationships {
+        rels_tmp_variables.push(rel.into_from_resource_tokens_storage_var());
+        rels_parsing_match_arms.push(rel.into_from_local_resource_tokens_match_arm());
+        rels_assign_to_field.push(rel.into_from_resource_tokens_var_assign());
+    }
+
+    let expanded_impls = quote::quote! {
+        #[automatically_derived]
+        impl #generics std::convert::TryFrom<jayapi::LocalResource> for #struct_name #generics {
+            type Error = ::jayapi::ParsingError;
+            fn try_from(resource: ::jayapi::LocalResource) -> Result<Self, Self::Error> {
+                #(#attrs_tmp_variables)*
+                #(#rels_tmp_variables)*
+                if let Some(attrs) = resource.attributes {
+                    for (k,v) in attrs {
+                        match k.as_str() {
+                            #(#attrs_parsing_match_arms)*
+                            f => {
+                                return Err(::jayapi::ParsingError::UnknownField { field: f.to_string() });
+                            }
+                       }
+                    }
+                }
+                if let Some(rels) = resource.relationships {
+                    for (k,v) in rels.iter() {
+                        match k.as_str() {
+                            #(#rels_parsing_match_arms)*
+                            f => {
+                                return Err(::jayapi::ParsingError::UnknownRelationship { relationship: f.to_owned() });
+                            }
+                        }
+                    }
+                }
+                Ok(#struct_name {
+                    #resource_id_field_tokens
+                    #(#attrs_assign_to_field)*
+                    #(#rels_assign_to_field)*
+                })
+            }
+        }
+    };
+
+    proc_macro::TokenStream::from(expanded_impls)
+}
+
 #[cfg(feature = "json-schema")]
 #[proc_macro_derive(JsonSchema, attributes(jayapi))]
 pub fn json_schema_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -883,6 +1440,7 @@ pub fn json_schema_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
     let mut relationships: Vec<RelationshipData> = Vec::new();
     let mut attr_fields: Vec<AttributeData> = Vec::new();
     let mut id_field: Option<IdData> = None;
+    let mut lid_field: Option<LidData> = None;
 
     let struct_fields = input
         .data
@@ -907,6 +1465,22 @@ pub fn json_schema_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                 id_field =
                     Some(id_attr.into_data(field_or_idx.clone(), &field.ty, resource_type.clone()));
             }
+            DeriveFieldVariant::Lid(lid_attr) => {
+                lid_field = Some(lid_attr.into_data(
+                    field_or_idx.clone(),
+                    &field.ty,
+                    resource_type.clone(),
+                ));
+            }
+            DeriveFieldVariant::IdAndLid(id_attr, lid_attr) => {
+                id_field =
+                    Some(id_attr.into_data(field_or_idx.clone(), &field.ty, resource_type.clone()));
+                lid_field = Some(lid_attr.into_data(
+                    field_or_idx.clone(),
+                    &field.ty,
+                    resource_type.clone(),
+                ));
+            }
             DeriveFieldVariant::Attribute(attribute_attr) => {
                 attr_fields.push(attribute_attr.into_data(field_or_idx.clone(), &field.ty));
             }
@@ -927,9 +1501,31 @@ pub fn json_schema_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
         .into_iter()
         .map(|a| a.into_json_schema_part())
         .collect::<Vec<_>>();
-    let id_schema_part = id_field
-        .map(|part| part.into_id_type_json_schema_part())
-        .unwrap_or_else(|| quote! {{ "type": "string", }});
+
+    let resource_id_schema_section = match (id_field, lid_field) {
+        (None, None) => quote! {},
+        (None, Some(lid_data)) => {
+            let lid_schema_part = lid_data.into_id_type_json_schema_part();
+            quote! {
+                "lid": #lid_schema_part,
+            }
+        }
+        (Some(id_data), None) => {
+            let id_schema_part = id_data.into_id_type_json_schema_part();
+            quote! {
+                "id": #id_schema_part,
+            }
+        }
+        (Some(id_data), Some(lid_data)) => {
+            // NOTE: this is somewhat nonsensical but there is no reason to stop users from documenting their API like that
+            let id_schema_part = id_data.into_id_type_json_schema_part();
+            let lid_schema_part = lid_data.into_id_type_json_schema_part();
+            quote! {
+                "id": #id_schema_part,
+                "lid": #lid_schema_part,
+            }
+        }
+    };
 
     let expanded_impls = quote::quote! {
         #[automatically_derived]
@@ -941,7 +1537,7 @@ pub fn json_schema_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                 ::schemars::json_schema!({
                     "type": "object",
                     "properties": {
-                        "id": #id_schema_part,
+                        #resource_id_schema_section
                         "type": {
                             "type": "string",
                             "const": #resource_type
@@ -959,10 +1555,12 @@ pub fn json_schema_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                             }
                         }
                     },
-                    "required": ["type", "attributes"]
+                    "required": ["type"]
                 })
             }
         }
+        #[automatically_derived]
+        impl #generics ::jayapi::json_schema::JsonSchema for #struct_name #generics {}
     };
 
     proc_macro::TokenStream::from(expanded_impls)

@@ -15,6 +15,8 @@ pub mod json_schema;
 use std::marker::PhantomData;
 
 pub mod extract;
+pub mod status;
+
 pub use serde_json;
 
 #[cfg(all(not(feature = "musli"), not(feature = "serde")))]
@@ -22,8 +24,8 @@ std::compile_err!("either 'musli' or 'serde' feature must be enabled");
 
 pub type Error = ErrorResponse;
 pub type Data<STATUS, R> = DataResponse<STATUS, R>;
-pub type DataOk<R> = DataResponse<Ok, R>;
-pub type DataCreated<R> = DataResponse<Created, R>;
+pub type DataOk<R> = DataResponse<status::Ok, R>;
+pub type DataCreated<R> = DataResponse<status::Created, R>;
 
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -163,33 +165,8 @@ pub enum ErrorSource {
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
-pub struct Created {}
-#[derive(Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
-pub struct Ok {}
-
-pub trait DataResponseStatus {
-    fn status() -> u16;
-}
-
-impl DataResponseStatus for Created {
-    fn status() -> u16 {
-        201
-    }
-}
-
-impl DataResponseStatus for Ok {
-    fn status() -> u16 {
-        200
-    }
-}
-
-#[derive(Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
 #[allow(private_bounds)]
-pub struct DataResponse<STATUS: DataResponseStatus, T = ()> {
+pub struct DataResponse<STATUS: status::DataResponseStatus, T = ()> {
     #[cfg_attr(feature = "musli", musli(with = musli::serde))]
     //TODO: waiting for custom musli::Decode on the enum
     pub data: SingleOrCollection,
@@ -219,7 +196,20 @@ pub struct DataResponse<STATUS: DataResponseStatus, T = ()> {
     pub resource_ty: PhantomData<T>,
 }
 
-impl<STATUS: DataResponseStatus, T> DataResponse<STATUS, T> {
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct DataRequest {
+    data: crate::LocalResource,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    #[cfg_attr(feature = "musli", musli(default, skip_encoding_if = Option::is_none))]
+    included: Option<Vec<crate::LocalResource>>,
+}
+
+impl<STATUS: status::DataResponseStatus, T> DataResponse<STATUS, T> {
     pub fn include(mut self, resource: impl AsResource) -> Self {
         let included: &mut Vec<_> = self.included.get_or_insert_default();
         included.push(resource.into());
@@ -247,7 +237,7 @@ impl<STATUS: DataResponseStatus, T> DataResponse<STATUS, T> {
 }
 
 #[cfg(all(not(feature = "musli"), feature = "axum"))]
-impl<STATUS: DataResponseStatus + Send + Sync, T> axum::response::IntoResponse
+impl<STATUS: status::DataResponseStatus + Send + Sync, T> axum::response::IntoResponse
     for DataResponse<STATUS, T>
 {
     fn into_response(self) -> axum::response::Response {
@@ -260,14 +250,14 @@ impl<STATUS: DataResponseStatus + Send + Sync, T> axum::response::IntoResponse
 }
 
 #[cfg(all(feature = "musli", feature = "axum"))]
-impl<STATUS: DataResponseStatus + Send + Sync, R> axum::response::IntoResponse
+impl<STATUS: status::DataResponseStatus + Send + Sync, R> axum::response::IntoResponse
     for DataResponse<STATUS, R>
 where
-    STATUS: musli::Encode<musli::mode::Text>,
+    DataResponse<STATUS, R>: musli::Encode<musli::mode::Text>,
 {
     fn into_response(self) -> axum::response::Response {
         (
-            axum::StatusCode::from_u16(STATUS::status()).unwrap(),
+            axum::http::StatusCode::from_u16(STATUS::status()).unwrap(),
             [(axum::http::header::CONTENT_TYPE, "application/json")],
             musli::json::to_string(&self).unwrap(),
         )
@@ -275,7 +265,9 @@ where
     }
 }
 
-impl<R: AsResource, STATUS: DataResponseStatus> FromIterator<R> for DataResponse<STATUS, Vec<R>> {
+impl<R: AsResource, STATUS: status::DataResponseStatus> FromIterator<R>
+    for DataResponse<STATUS, Vec<R>>
+{
     fn from_iter<T: IntoIterator<Item = R>>(iter: T) -> Self {
         Self {
             data: SingleOrCollection::from_iter(iter),
@@ -287,7 +279,7 @@ impl<R: AsResource, STATUS: DataResponseStatus> FromIterator<R> for DataResponse
     }
 }
 
-impl<R: AsResource, STATUS: DataResponseStatus> From<R> for DataResponse<STATUS, R> {
+impl<R: AsResource, STATUS: status::DataResponseStatus> From<R> for DataResponse<STATUS, R> {
     fn from(value: R) -> Self {
         Self {
             data: SingleOrCollection::Single(value.into()),
@@ -299,7 +291,7 @@ impl<R: AsResource, STATUS: DataResponseStatus> From<R> for DataResponse<STATUS,
     }
 }
 
-impl<R: AsResource, STATUS: DataResponseStatus, I: IntoIterator<Item = R>> From<I>
+impl<R: AsResource, STATUS: status::DataResponseStatus, I: IntoIterator<Item = R>> From<I>
     for DataResponse<STATUS, Vec<R>>
 {
     fn from(value: I) -> Self {
@@ -317,7 +309,7 @@ impl<R: AsResource, STATUS: DataResponseStatus, I: IntoIterator<Item = R>> From<
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(untagged))]
 #[cfg_attr(feature = "musli", derive(musli::Decode))]
-#[cfg_attr(feature = "musli", musli(tag = "type", name_all = "snake_case"))]
+#[cfg_attr(feature = "musli", musli(untagged))]
 pub enum SingleOrCollection {
     #[cfg_attr(feature = "musli", musli(transparent))]
     Collection(Vec<Resource>),
@@ -397,6 +389,27 @@ pub struct Resource {
     pub relationships: Option<RelationshipsMap>,
 }
 
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
+pub struct LocalResource {
+    #[cfg_attr(feature = "musli", musli(mode = Text, name = "type"))]
+    pub r#type: String,
+    pub lid: Option<String>,
+    #[cfg_attr(feature = "musli", musli(skip_encoding_if = Option::is_none, default))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Option::is_none", default)
+    )]
+    pub attributes: Option<AttributesMap>,
+    #[cfg_attr(feature = "musli", musli(skip_encoding_if = Option::is_none, default))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Option::is_none", default)
+    )]
+    pub relationships: Option<LocalRelationshipsMap>,
+}
+
 #[derive(Debug, Clone, Eq, PartialOrd, Ord, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
@@ -404,6 +417,15 @@ pub struct ResourceIdentifier {
     #[cfg_attr(feature = "musli", musli(mode = Text, name = "type"))]
     pub r#type: String,
     pub id: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
+pub struct LocalResourceIdentifier {
+    #[cfg_attr(feature = "musli", musli(mode = Text, name = "type"))]
+    pub r#type: String,
+    pub lid: String,
 }
 
 impl PartialEq<Resource> for ResourceIdentifier {
@@ -418,6 +440,26 @@ impl PartialEq<ResourceIdentifier> for Resource {
     }
 }
 
+impl PartialEq<LocalResource> for LocalResourceIdentifier {
+    fn eq(&self, other: &LocalResource) -> bool {
+        if let Some(lid) = &other.lid {
+            self.r#type == other.r#type && self.lid == *lid
+        } else {
+            false
+        }
+    }
+}
+
+impl PartialEq<LocalResourceIdentifier> for LocalResource {
+    fn eq(&self, other: &LocalResourceIdentifier) -> bool {
+        if let Some(lid) = &self.lid {
+            self.r#type == other.r#type && *lid == other.lid
+        } else {
+            false
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
@@ -428,14 +470,44 @@ pub struct RelationshipsMap(
     std::collections::HashMap<String, Relationship>,
 );
 
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
+#[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
+#[cfg_attr(feature = "musli", musli(transparent))]
+pub struct LocalRelationshipsMap(
+    #[cfg_attr(feature = "musli", musli(with = musli::serde))]
+    std::collections::HashMap<String, LocalOrGlobalRelationship>,
+);
+
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(untagged))]
-//#[cfg_attr(feature = "musli", derive(musli::Decode))]
-//#[cfg_attr(feature = "musli", musli(tag = "type", name_all = "snake_case"))]
+#[cfg_attr(feature = "musli", derive(musli::Decode))]
+#[cfg_attr(feature = "musli", musli(untagged))]
 pub enum Relationship {
     Relation1to1 { data: ResourceIdentifier },
     Relation1toM { data: Vec<ResourceIdentifier> },
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(untagged))]
+#[cfg_attr(feature = "musli", derive(musli::Decode))]
+#[cfg_attr(feature = "musli", musli(untagged))]
+pub enum LocalRelationship {
+    Relation1to1 { data: LocalResourceIdentifier },
+    Relation1toM { data: Vec<LocalResourceIdentifier> },
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(untagged))]
+#[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
+#[cfg_attr(feature = "musli", musli(untagged))]
+pub enum LocalOrGlobalRelationship {
+    Local(LocalRelationship),
+    Global(Relationship),
 }
 
 impl RelationshipsMap {
@@ -483,6 +555,59 @@ impl RelationshipsMap {
     }
 }
 
+impl LocalRelationshipsMap {
+    pub fn new() -> Self {
+        Self(std::collections::HashMap::new())
+    }
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self(std::collections::HashMap::with_capacity(capacity))
+    }
+    pub fn get(&self, key: &str) -> Option<&LocalOrGlobalRelationship> {
+        self.0.get(key)
+    }
+    pub fn remove(&mut self, key: &str) -> Option<LocalOrGlobalRelationship> {
+        self.0.remove(key)
+    }
+    pub fn values(
+        &self,
+    ) -> std::collections::hash_map::Values<'_, String, LocalOrGlobalRelationship> {
+        self.0.values()
+    }
+    pub fn keys(&self) -> std::collections::hash_map::Keys<'_, String, LocalOrGlobalRelationship> {
+        self.0.keys()
+    }
+    pub fn iter(&self) -> std::collections::hash_map::Iter<'_, String, LocalOrGlobalRelationship> {
+        self.0.iter()
+    }
+    pub fn iter_mut(
+        &mut self,
+    ) -> std::collections::hash_map::IterMut<'_, String, LocalOrGlobalRelationship> {
+        self.0.iter_mut()
+    }
+    pub fn insert(
+        &mut self,
+        k: String,
+        v: LocalOrGlobalRelationship,
+    ) -> Option<LocalOrGlobalRelationship> {
+        self.0.insert(k, v)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+    pub fn clear(&mut self) {
+        self.0.clear()
+    }
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.0.contains_key(key)
+    }
+    pub fn capacity(&self) -> usize {
+        self.0.capacity()
+    }
+}
+
 impl FromIterator<(String, Relationship)> for RelationshipsMap {
     fn from_iter<T: IntoIterator<Item = (String, Relationship)>>(iter: T) -> Self {
         Self(std::collections::HashMap::from_iter(iter))
@@ -491,6 +616,19 @@ impl FromIterator<(String, Relationship)> for RelationshipsMap {
 
 impl std::ops::Index<&str> for RelationshipsMap {
     type Output = Relationship;
+    fn index(&self, index: &str) -> &Self::Output {
+        self.0.index(index)
+    }
+}
+
+impl FromIterator<(String, LocalOrGlobalRelationship)> for LocalRelationshipsMap {
+    fn from_iter<T: IntoIterator<Item = (String, LocalOrGlobalRelationship)>>(iter: T) -> Self {
+        Self(std::collections::HashMap::from_iter(iter))
+    }
+}
+
+impl std::ops::Index<&str> for LocalRelationshipsMap {
+    type Output = LocalOrGlobalRelationship;
     fn index(&self, index: &str) -> &Self::Output {
         self.0.index(index)
     }
@@ -544,8 +682,59 @@ where
     }
 }
 
-pub trait AsResource {
+//TODO: custom musli::Decode
+#[cfg(feature = "musli")]
+impl<'s, M> musli::Encode<M> for LocalRelationship
+where
+    LocalResource: musli::Encode<M>,
+    LocalResourceIdentifier: musli::Encode<M>,
+{
+    type Encode = Self;
+
+    #[inline]
+    fn as_encode(&self) -> &Self::Encode {
+        self
+    }
+
+    #[inline]
+    fn encode<E>(&self, encoder: E) -> Result<(), E::Error>
+    where
+        E: musli::Encoder<Mode = M>,
+    {
+        use musli::en::*;
+
+        match self {
+            Self::Relation1toM { data } => {
+                let mut strct = encoder.encode_map(1)?;
+                let mut entry = strct.encode_entry()?;
+                let key = entry.encode_key()?;
+                key.encode_string("data")?;
+                let val = entry.encode_value()?;
+                let mut seq = val.encode_sequence(data.len())?;
+                for elem in data {
+                    seq.push(elem)?;
+                }
+                seq.finish_sequence()?;
+                entry.finish_entry()?;
+                strct.finish_map()
+            }
+            Self::Relation1to1 { data } => {
+                let mut strct = encoder.encode_map(1)?;
+                let mut entry = strct.encode_entry()?;
+                let key = entry.encode_key()?;
+                key.encode_string("data")?;
+                let val = entry.encode_value()?;
+                val.encode(data)
+            }
+        }
+    }
+}
+
+pub trait ResourceType {
     fn ty() -> &'static str;
+}
+
+pub trait AsResource: ResourceType {
     fn resource_identifier(&self) -> ResourceIdentifier;
     fn attributes(&self) -> Option<AttributesMap> {
         None
@@ -556,7 +745,22 @@ pub trait AsResource {
 }
 
 pub trait FromResource: TryFrom<Resource> {}
-impl<T> FromResource for T where T: TryFrom<Resource> {}
+impl<T> FromResource for T where T: TryFrom<Resource, Error = crate::ParsingError> {}
+
+pub trait AsLocalResource: ResourceType {
+    fn local_resource_identifier(&self) -> Option<LocalResourceIdentifier> {
+        None
+    }
+    fn attributes(&self) -> Option<AttributesMap> {
+        None
+    }
+    fn relationships(&self) -> Option<LocalRelationshipsMap> {
+        None
+    }
+}
+
+pub trait FromLocalResource: TryFrom<LocalResource> {}
+impl<T> FromLocalResource for T where T: TryFrom<LocalResource, Error = crate::ParsingError> {}
 
 impl<T: AsResource> From<T> for ResourceIdentifier {
     #[inline]
@@ -570,14 +774,44 @@ impl<T: AsResource> From<T> for ResourceIdentifier {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
 pub enum ParsingError {
-    UnrecognizedFormat { source: String },
-    MissingRequiredField { field_name: String },
-    MismatchedTypes { expected: String, got: String },
-    ValueParsingError { on_field: String, err: String },
-    UnknownField { field: String },
-    UnknownRelationship { relationship: String },
-    WrongRelationshipKind { relationship: String }, //TODO: add received and accepted arity/kind
-    DeserializationError { source: String },
+    UnrecognizedFormat {
+        source: String,
+    },
+    MissingRequiredField {
+        field_name: String,
+    },
+    MismatchedTypes {
+        expected: String,
+        got: String,
+    },
+    ValueParsingError {
+        on_field: String,
+        err: String,
+    },
+    UnknownField {
+        field: String,
+    },
+    UnknownRelationship {
+        relationship: String,
+    },
+    WrongRelationshipKind {
+        //TODO: add received and accepted arity/kind
+        relationship: String,
+    },
+    DeserializationError {
+        source: String,
+    },
+    IncludedTypeNotAccepted {
+        obtained: String,
+        allowed: Vec<String>,
+    },
+    NotAcceptingIncluded,
+    IncludedResourceMissingLid {
+        resource_type: String,
+    },
+    LidRequired {
+        resource_type: String,
+    },
 }
 
 impl std::fmt::Display for ParsingError {
@@ -621,6 +855,31 @@ impl std::fmt::Display for ParsingError {
             Self::WrongRelationshipKind { relationship } => {
                 //TODO: improve
                 write!(f, "relationship \"{relationship}\" has wrong arity")
+            }
+            Self::IncludedTypeNotAccepted {
+                obtained,
+                allowed: _,
+            } => {
+                //TODO: improve
+                write!(
+                    f,
+                    "type \"{obtained}\" is not allowed to be inclueded in this operation"
+                )
+            }
+            Self::NotAcceptingIncluded => {
+                write!(f, "\"included\" section is not allowed for this operation")
+            }
+            Self::IncludedResourceMissingLid { resource_type } => {
+                write!(
+                    f,
+                    "a local resource in the \"included\" section of type \"{resource_type}\" is missing a \"lid\" identificator"
+                )
+            }
+            Self::LidRequired { resource_type } => {
+                write!(
+                    f,
+                    "\"lid\" is required for resource of type \"{resource_type}\" in this context"
+                )
             }
         }
     }
@@ -688,6 +947,33 @@ impl axum::response::IntoResponse for ParsingError {
                     description: Some(self.to_string()),
                     ..Default::default()
                 },
+                Self::IncludedTypeNotAccepted {
+                    obtained: _,
+                    allowed: _,
+                } => ErrorObject {
+                    status: 400,
+                    title: "included resource not accepted".to_owned(),
+                    description: Some(self.to_string()),
+                    ..Default::default()
+                },
+                Self::NotAcceptingIncluded => ErrorObject {
+                    status: 400,
+                    title: "operation not allowed".to_owned(),
+                    description: Some(self.to_string()),
+                    ..Default::default()
+                },
+                Self::IncludedResourceMissingLid { resource_type: _ } => ErrorObject {
+                    status: 400,
+                    title: "included resource not accepted".to_owned(),
+                    description: Some(self.to_string()),
+                    ..Default::default()
+                },
+                Self::LidRequired { resource_type: _ } => ErrorObject {
+                    status: 400,
+                    title: "lid missing".to_owned(),
+                    description: Some(self.to_string()),
+                    ..Default::default()
+                },
             }],
         };
         #[cfg(feature = "musli")]
@@ -720,7 +1006,7 @@ where
     }
 }
 
-impl<STATUS: DataResponseStatus, R> From<Resource> for DataResponse<STATUS, R> {
+impl<STATUS: status::DataResponseStatus, R> From<Resource> for DataResponse<STATUS, R> {
     fn from(val: Resource) -> Self {
         DataResponse::<STATUS, R> {
             data: SingleOrCollection::Single(val),

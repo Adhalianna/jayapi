@@ -1,8 +1,12 @@
-use jayapi::{AsResource, FromResource, JsonSchema};
+use jayapi::{
+    AsLocalResource, AsResource, FromLocalResource, FromResource, JsonSchema, ResourceType,
+};
 
-#[derive(FromResource, AsResource, JsonSchema)]
+#[derive(
+    ResourceType, FromLocalResource, AsLocalResource, FromResource, AsResource, JsonSchema,
+)]
 pub struct Test {
-    #[jayapi(id)]
+    #[jayapi(id, lid)]
     id: u32,
     attribute: String,
     second_attribute: Option<String>,
@@ -17,7 +21,7 @@ pub struct Test {
 }
 
 pub fn main() {
-    let mut gen = schemars::SchemaGenerator::default();
+    let mut generator = schemars::SchemaGenerator::default();
 
-    let _schema = dbg!(<Test as schemars::JsonSchema>::json_schema(&mut gen));
+    let _schema = dbg!(<Test as schemars::JsonSchema>::json_schema(&mut generator));
 }
