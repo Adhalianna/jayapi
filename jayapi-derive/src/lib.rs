@@ -445,6 +445,7 @@ impl AttributeData {
 struct RelationshipFieldAttr {
     name: Option<String>,
     resource_type: Option<String>,
+    local: darling::util::Flag,
     to_many: darling::util::Flag,
     optional: darling::util::Flag,
     #[darling(rename = "to_string_with")]
@@ -489,6 +490,7 @@ impl RelationshipFieldAttr {
             resource_type: self.resource_type.clone().unwrap_or(name),
             to_many: self.to_many.is_present(),
             optional: self.optional.is_present(),
+            local: self.local.is_present(),
             parse_method: self.parse_method.to_owned().unwrap_or(
                 syn::Path::from_string(&("str::parse::<".to_owned() + &single_item_type + ">"))
                     .unwrap(),
@@ -507,6 +509,7 @@ struct RelationshipData {
     resource_type: String,
     to_many: bool,
     optional: bool,
+    local: bool,
     to_string_method: syn::Path,
     parse_method: syn::Path,
 }
@@ -639,45 +642,89 @@ impl RelationshipData {
         let to_string_method = &self.to_string_method;
         let field = &self.field;
 
-        if self.to_many {
-            quote! {
-                map.insert(
-                    #name.to_owned(),
-                    ::jayapi::LocalOrGlobalRelationship::Local(::jayapi::LocalRelationship::Relation1toM {
-                        data: self.#field.iter().map(|item| {
-                            ::jayapi::LocalResourceIdentifier{
-                                r#type: #resource_type.to_owned(),
-                                lid: #to_string_method(item)
-                            }
-                        }).collect(),
-                    })
-                );
-            }
-        } else if self.optional {
-            quote! {
-                if let ::std::option::Option::Some(id) = &self.#field {
+        if self.local {
+            if self.to_many {
+                quote! {
+                    map.insert(
+                        #name.to_owned(),
+                        ::jayapi::LocalOrGlobalRelationship::Local(::jayapi::LocalRelationship::Relation1toM {
+                            data: self.#field.iter().map(|item| {
+                                ::jayapi::LocalResourceIdentifier{
+                                    r#type: #resource_type.to_owned(),
+                                    lid: #to_string_method(item)
+                                }
+                            }).collect(),
+                        })
+                    );
+                }
+            } else if self.optional {
+                quote! {
+                    if let ::std::option::Option::Some(id) = &self.#field {
+                        map.insert(
+                            #name.to_owned(),
+                            ::jayapi::LocalOrGlobalRelationship::Local(::jayapi::LocalRelationship::Relation1to1 {
+                                data: ::jayapi::LocalResourceIdentifier {
+                                    r#type: #resource_type.to_owned(),
+                                    lid: #to_string_method(id),
+                                }
+                            })
+                        );
+                    }
+                }
+            } else {
+                quote! {
                     map.insert(
                         #name.to_owned(),
                         ::jayapi::LocalOrGlobalRelationship::Local(::jayapi::LocalRelationship::Relation1to1 {
                             data: ::jayapi::LocalResourceIdentifier {
                                 r#type: #resource_type.to_owned(),
-                                lid: #to_string_method(id),
+                                lid: #to_string_method(&self.#field),
                             }
                         })
                     );
                 }
             }
         } else {
-            quote! {
-                map.insert(
-                    #name.to_owned(),
-                    ::jayapi::LocalOrGlobalRelationship::Local(::jayapi::LocalRelationship::Relation1to1 {
-                        data: ::jayapi::LocalResourceIdentifier {
-                            r#type: #resource_type.to_owned(),
-                            lid: #to_string_method(&self.#field),
-                        }
-                    })
-                );
+            if self.to_many {
+                quote! {
+                    map.insert(
+                        #name.to_owned(),
+                        ::jayapi::LocalOrGlobalRelationship::Global(::jayapi::Relationship::Relation1toM {
+                            data: self.#field.iter().map(|item| {
+                                ::jayapi::ResourceIdentifier{
+                                    r#type: #resource_type.to_owned(),
+                                    id: #to_string_method(item)
+                                }
+                            }).collect(),
+                        })
+                    );
+                }
+            } else if self.optional {
+                quote! {
+                    if let ::std::option::Option::Some(id) = &self.#field {
+                        map.insert(
+                            #name.to_owned(),
+                            ::jayapi::LocalOrGlobalRelationship::Global(::jayapi::Relationship::Relation1to1 {
+                                data: ::jayapi::ResourceIdentifier {
+                                    r#type: #resource_type.to_owned(),
+                                    id: #to_string_method(id),
+                                }
+                            })
+                        );
+                    }
+                }
+            } else {
+                quote! {
+                    map.insert(
+                        #name.to_owned(),
+                        ::jayapi::LocalOrGlobalRelationship::Global(::jayapi::Relationship::Relation1to1 {
+                            data: ::jayapi::ResourceIdentifier {
+                                r#type: #resource_type.to_owned(),
+                                id: #to_string_method(&self.#field),
+                            }
+                        })
+                    );
+                }
             }
         }
     }
