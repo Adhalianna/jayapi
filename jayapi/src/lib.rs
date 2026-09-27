@@ -28,7 +28,7 @@ pub type Data<STATUS, R> = DataResponse<STATUS, R>;
 pub type DataOk<R> = DataResponse<status::Ok, R>;
 pub type DataCreated<R> = DataResponse<status::Created, R>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
 #[allow(private_bounds)]
@@ -197,7 +197,7 @@ impl<STATUS: status::DataResponseStatus, R: TryFrom<Resource, Error = ParsingErr
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(untagged))]
 #[cfg_attr(feature = "musli", derive(musli::Decode))]
