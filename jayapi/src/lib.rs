@@ -14,6 +14,7 @@ pub mod json_schema;
 
 use std::marker::PhantomData;
 
+pub mod error;
 pub mod extract;
 pub mod status;
 
@@ -22,145 +23,10 @@ pub use serde_json;
 #[cfg(all(not(feature = "musli"), not(feature = "serde")))]
 std::compile_err!("either 'musli' or 'serde' feature must be enabled");
 
-pub type Error = ErrorResponse;
+pub type Error = error::ErrorResponse;
 pub type Data<STATUS, R> = DataResponse<STATUS, R>;
 pub type DataOk<R> = DataResponse<status::Ok, R>;
 pub type DataCreated<R> = DataResponse<status::Created, R>;
-
-#[derive(Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
-#[cfg_attr(feature = "musli", derive(musli::Encode))]
-pub struct ErrorResponse {
-    pub errors: Vec<ErrorObject>,
-    #[cfg_attr(feature = "musli", musli(skip))]
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub status: u16,
-}
-
-#[cfg(feature = "axum")]
-impl axum::response::IntoResponse for ErrorResponse {
-    fn into_response(self) -> axum::response::Response {
-        #[cfg(feature = "musli")]
-        let res = (
-            axum::http::StatusCode::from_u16(self.status).unwrap(),
-            [(axum::http::header::CONTENT_TYPE, "application/json")],
-            musli::json::to_string(&self).unwrap(),
-        )
-            .into_response();
-        #[cfg(not(feature = "musli"))]
-        let res = (
-            axum::http::StatusCode::from_u16(self.status).unwrap(),
-            axum::Json(self),
-        )
-            .into_response();
-
-        res
-    }
-}
-
-impl From<ErrorObject> for ErrorResponse {
-    fn from(val: ErrorObject) -> Self {
-        Self {
-            status: val.status,
-            errors: vec![val],
-        }
-    }
-}
-
-#[cfg(feature = "anyhow")]
-impl From<anyhow::Error> for ErrorResponse {
-    fn from(val: anyhow::Error) -> Self {
-        ErrorObject::from(val).into()
-    }
-}
-
-#[derive(Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
-pub struct ErrorObject {
-    pub status: u16,
-    #[cfg_attr(
-        feature = "serde",
-        serde(default, skip_serializing_if = "Option::is_none")
-    )]
-    #[cfg_attr(feature = "musli", musli(default, skip_encoding_if = Option::is_none))]
-    pub code: Option<String>,
-    pub title: String,
-    #[cfg_attr(
-        feature = "serde",
-        serde(default, skip_serializing_if = "Option::is_none")
-    )]
-    #[cfg_attr(feature = "musli", musli(default, skip_encoding_if = Option::is_none))]
-    pub description: Option<String>,
-    #[cfg_attr(
-        feature = "serde",
-        serde(default, skip_serializing_if = "Option::is_none")
-    )]
-    #[cfg_attr(feature = "musli", musli(default, skip_encoding_if = Option::is_none))]
-    pub source: Option<ErrorSource>,
-}
-
-impl ErrorObject {
-    pub fn with_status(&mut self, status: u16) -> &mut Self {
-        self.status = status;
-        self
-    }
-    pub fn with_code(&mut self, code: String) -> &mut Self {
-        self.code = Some(code);
-        self
-    }
-    pub fn with_description(&mut self, description: String) -> &mut Self {
-        self.description = Some(description);
-        self
-    }
-    pub fn with_source(&mut self, source: ErrorSource) -> &mut Self {
-        self.source = Some(source);
-        self
-    }
-}
-
-#[cfg(feature = "axum")]
-impl axum::response::IntoResponse for ErrorObject {
-    fn into_response(self) -> axum::response::Response {
-        ErrorResponse {
-            status: self.status,
-            errors: vec![self],
-        }
-        .into_response()
-    }
-}
-
-impl Default for ErrorObject {
-    // ErrorObject defaults to a very unhelpful internal server error.
-    fn default() -> Self {
-        Self {
-            status: 500,
-            code: None,
-            title: String::from("internal server error"),
-            description: None,
-            source: None,
-        }
-    }
-}
-
-#[cfg(feature = "anyhow")]
-impl From<anyhow::Error> for ErrorObject {
-    fn from(val: anyhow::Error) -> Self {
-        Self {
-            title: val.to_string(),
-            ..Default::default()
-        }
-    }
-}
-
-#[derive(Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
-pub enum ErrorSource {
-    Header { header: String },
-    Parameter { parameter: String },
-    Pointer { pointer: String },
-}
 
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -301,6 +167,32 @@ impl<R: AsResource, STATUS: status::DataResponseStatus, I: IntoIterator<Item = R
             links: None,
             status: PhantomData,
             resource_ty: PhantomData,
+        }
+    }
+}
+
+impl<STATUS: status::DataResponseStatus, R: TryFrom<Resource, Error = ParsingError>>
+    DataResponse<STATUS, R>
+{
+    /// Keep in mind that this comversion will discard all "included"
+    pub fn into_resource(self) -> Result<R, ParsingError> {
+        match self.data {
+            SingleOrCollection::Collection(_) => Err(ParsingError::ExpectedSingle),
+            SingleOrCollection::Single(resource) => R::try_from(resource),
+        }
+    }
+}
+impl<STATUS: status::DataResponseStatus, R: TryFrom<Resource, Error = ParsingError>>
+    DataResponse<STATUS, Vec<R>>
+{
+    /// Keep in mind that this conversion will discard all "included"
+    pub fn into_resources(self) -> Result<Vec<R>, ParsingError> {
+        match self.data {
+            SingleOrCollection::Single(_) => Err(ParsingError::ExpectedSingle),
+            SingleOrCollection::Collection(resources) => resources
+                .into_iter()
+                .map(|r| R::try_from(r))
+                .collect::<Result<Vec<R>, _>>(),
         }
     }
 }
@@ -812,6 +704,8 @@ pub enum ParsingError {
     LidRequired {
         resource_type: String,
     },
+    ExpectedSingle,
+    ExpectedCollection,
 }
 
 impl std::fmt::Display for ParsingError {
@@ -881,6 +775,12 @@ impl std::fmt::Display for ParsingError {
                     "\"lid\" is required for resource of type \"{resource_type}\" in this context"
                 )
             }
+            Self::ExpectedSingle => {
+                write!(f, "expected a single resource in the \"data\" section")
+            }
+            Self::ExpectedCollection => {
+                write!(f, "expected an array of resources in the \"data\" section")
+            }
         }
     }
 }
@@ -890,7 +790,9 @@ impl std::error::Error for ParsingError {}
 #[cfg(feature = "axum")]
 impl axum::response::IntoResponse for ParsingError {
     fn into_response(self) -> axum::response::Response {
-        let res = ErrorResponse {
+        use crate::error::ErrorObject;
+
+        let res = error::ErrorResponse {
             status: axum::http::StatusCode::BAD_REQUEST.into(),
             errors: vec![match &self {
                 Self::ValueParsingError {
@@ -971,6 +873,18 @@ impl axum::response::IntoResponse for ParsingError {
                 Self::LidRequired { resource_type: _ } => ErrorObject {
                     status: 400,
                     title: "lid missing".to_owned(),
+                    description: Some(self.to_string()),
+                    ..Default::default()
+                },
+                Self::ExpectedSingle => ErrorObject {
+                    status: 400,
+                    title: "expected a single resource".to_owned(),
+                    description: Some(self.to_string()),
+                    ..Default::default()
+                },
+                Self::ExpectedCollection => ErrorObject {
+                    status: 400,
+                    title: "expected a collection of resources".to_owned(),
                     description: Some(self.to_string()),
                     ..Default::default()
                 },
