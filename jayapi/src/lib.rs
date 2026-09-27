@@ -911,16 +911,18 @@ where
     fn from(val: T) -> Self {
         let iden = val.resource_identifier();
         let attr = val.attributes();
+        let rels = val.relationships();
         Self {
             r#type: iden.r#type.to_string(),
             id: iden.id,
             attributes: attr,
-            relationships: None,
+            relationships: rels,
         }
     }
 }
 
 impl<STATUS: status::DataResponseStatus, R> From<Resource> for DataResponse<STATUS, R> {
+    /// Builds a response with just "data" section and a single resource underneath.
     fn from(val: Resource) -> Self {
         DataResponse::<STATUS, R> {
             data: SingleOrCollection::Single(val),
