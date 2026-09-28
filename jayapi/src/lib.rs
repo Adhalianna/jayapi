@@ -963,6 +963,33 @@ impl<STATUS: status::DataResponseStatus, R> From<Resource> for DataResponse<STAT
     }
 }
 
+impl<T> From<T> for LocalResource
+where
+    T: AsLocalResource,
+{
+    fn from(val: T) -> Self {
+        let iden = val.local_resource_identifier();
+        let attr = val.attributes();
+        let rels = val.relationships();
+        Self {
+            r#type: T::ty().to_owned(),
+            lid: iden.map(|iden| iden.lid),
+            attributes: attr,
+            relationships: rels,
+        }
+    }
+}
+
+impl From<LocalResource> for DataRequest {
+    /// Builds a request with just "data" section and a single resource underneath.
+    fn from(val: LocalResource) -> Self {
+        Self {
+            data: val,
+            included: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
