@@ -100,6 +100,35 @@ impl<STATUS: status::DataResponseStatus, T> DataResponse<STATUS, T> {
             Some(included) => included.iter().find(|r| *r == resource_iden).is_some(),
         }
     }
+    pub fn extract_included<R1>(
+        &self,
+    ) -> Result<Option<Vec<R1>>, <R1 as TryFrom<crate::Resource>>::Error>
+    where
+        R1: TryFrom<crate::Resource> + crate::ResourceType,
+    {
+        let parsed = self.included.as_ref().map(|v| {
+            v.iter()
+                .filter(|lr| lr.r#type == R1::ty())
+                .map(|lr| R1::try_from(lr.clone()))
+                .fold(Result::Ok(Vec::new()), |mut acc, r| match &mut acc {
+                    Ok(v) => match r {
+                        Ok(r1) => {
+                            v.push(r1);
+                            acc
+                        }
+                        Err(err) => Err(err),
+                    },
+                    Err(_) => acc,
+                })
+        });
+        match parsed {
+            Some(res) => match res {
+                Ok(v) => Ok(Some(v)),
+                Err(err) => Err(err),
+            },
+            None => Result::Ok(Option::None),
+        }
+    }
 }
 
 #[cfg(all(not(feature = "musli"), feature = "axum"))]
