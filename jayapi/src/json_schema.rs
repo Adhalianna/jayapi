@@ -7,7 +7,7 @@ const JSON_SCHEMA_RESPONSE_DEF: &'static str = "jayapi_data_response";
 pub trait JsonSchema: schemars::JsonSchema {}
 impl JsonSchema for crate::Resource {}
 impl JsonSchema for crate::LocalResource {}
-impl JsonSchema for crate::DataRequest {}
+impl JsonSchema for crate::DataPostRequest {}
 impl<STATUS: DataResponseStatus> JsonSchema for DataResponse<STATUS, ()> {}
 impl<STATUS: DataResponseStatus, R: crate::ResourceType + schemars::JsonSchema> JsonSchema
     for DataResponse<STATUS, R>

@@ -65,7 +65,7 @@ pub struct DataResponse<STATUS: status::DataResponseStatus, T = ()> {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-pub struct DataRequest {
+pub struct DataPostRequest {
     data: crate::LocalResource,
     #[cfg_attr(
         feature = "serde",
@@ -73,6 +73,42 @@ pub struct DataRequest {
     )]
     #[cfg_attr(feature = "musli", musli(default, skip_encoding_if = Option::is_none))]
     included: Option<Vec<crate::LocalResource>>,
+}
+
+impl<R: AsLocalResource> From<R> for DataPostRequest {
+    fn from(value: R) -> Self {
+        let iden = value.local_resource_identifier();
+        let data = LocalResource {
+            lid: iden.map(|iden| iden.lid),
+            r#type: R::ty().to_owned(),
+            attributes: value.attributes(),
+            relationships: value.relationships(),
+        };
+        Self {
+            data,
+            included: None,
+        }
+    }
+}
+
+impl<R: AsResource> From<R> for DataPutRequest {
+    fn from(value: R) -> Self {
+        let iden = value.resource_identifier();
+        Self {
+            data: Resource {
+                r#type: iden.r#type,
+                id: iden.id,
+                attributes: value.attributes(),
+                relationships: value.relationships(),
+            },
+        }
+    }
+}
+
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
+pub struct DataPutRequest {
+    data: crate::Resource,
 }
 
 impl<STATUS: status::DataResponseStatus, T> DataResponse<STATUS, T> {
@@ -980,7 +1016,7 @@ where
     }
 }
 
-impl From<LocalResource> for DataRequest {
+impl From<LocalResource> for DataPostRequest {
     /// Builds a request with just "data" section and a single resource underneath.
     fn from(val: LocalResource) -> Self {
         Self {

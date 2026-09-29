@@ -1,4 +1,4 @@
-use crate::DataRequest;
+use crate::{DataPostRequest, DataPutRequest};
 use std::marker::PhantomData;
 
 #[cfg(feature = "axum")]
@@ -40,13 +40,17 @@ impl_resource_type_list!(
 
 pub struct Any;
 
-pub struct ExtractDataRequest<R, ALLOW = ()> {
+pub struct ExtractPostRequest<R, ALLOW = ()> {
     pub data: R,
     included: Option<Vec<crate::LocalResource>>,
     allow_include: PhantomData<ALLOW>,
 }
 
-impl<R> ExtractDataRequest<R, Any> {
+pub struct ExtractPutRequest<R> {
+    pub data: R,
+}
+
+impl<R> ExtractPostRequest<R, Any> {
     pub fn extract_included<R1>(
         &self,
     ) -> Result<Option<Vec<R1>>, <R1 as TryFrom<crate::LocalResource>>::Error>
@@ -78,7 +82,7 @@ impl<R> ExtractDataRequest<R, Any> {
     }
 }
 
-impl<R, L: ResourceTypeList> ExtractDataRequest<R, L> {
+impl<R, L: ResourceTypeList> ExtractPostRequest<R, L> {
     pub fn extract_included<R1>(
         &self,
     ) -> Result<Option<Vec<R1>>, <R1 as TryFrom<crate::LocalResource>>::Error>
@@ -125,7 +129,7 @@ impl<
     T: TryFrom<crate::LocalResource, Error = crate::ParsingError>,
     L: ResourceTypeList,
     S: Send + Sync,
-> axum::extract::FromRequest<S> for ExtractDataRequest<T, L>
+> axum::extract::FromRequest<S> for ExtractPostRequest<T, L>
 {
     type Rejection = crate::ParsingError;
 
@@ -137,7 +141,7 @@ impl<
         })?;
         #[cfg(feature = "musli")]
         {
-            let req: DataRequest = musli::json::from_slice(&bytes).map_err(|e| {
+            let req: DataPostRequest = musli::json::from_slice(&bytes).map_err(|e| {
                 crate::ParsingError::DeserializationError {
                     source: e.to_string(),
                 }
@@ -166,7 +170,7 @@ impl<
         }
         #[cfg(not(feature = "musli"))]
         {
-            let req: DataRequest = serde_json::from_slice(&bytes).map_err(|e| {
+            let req: DataPostRequest = serde_json::from_slice(&bytes).map_err(|e| {
                 crate::ParsingError::DeserializationError {
                     source: e.to_string(),
                 }
@@ -198,7 +202,7 @@ impl<
 
 #[cfg(feature = "axum")]
 impl<T: TryFrom<crate::LocalResource, Error = crate::ParsingError>, S: Send + Sync>
-    axum::extract::FromRequest<S> for ExtractDataRequest<T, ()>
+    axum::extract::FromRequest<S> for ExtractPostRequest<T, ()>
 {
     type Rejection = crate::ParsingError;
 
@@ -210,7 +214,7 @@ impl<T: TryFrom<crate::LocalResource, Error = crate::ParsingError>, S: Send + Sy
         })?;
         #[cfg(feature = "musli")]
         {
-            let req: DataRequest = musli::json::from_slice(&bytes).map_err(|e| {
+            let req: DataPostRequest = musli::json::from_slice(&bytes).map_err(|e| {
                 crate::ParsingError::DeserializationError {
                     source: e.to_string(),
                 }
@@ -227,7 +231,7 @@ impl<T: TryFrom<crate::LocalResource, Error = crate::ParsingError>, S: Send + Sy
         }
         #[cfg(not(feature = "musli"))]
         {
-            let req: DataRequest = serde_json::from_slice(&bytes).map_err(|e| {
+            let req: DataPostRequest = serde_json::from_slice(&bytes).map_err(|e| {
                 crate::ParsingError::DeserializationError {
                     source: e.to_string(),
                 }
@@ -247,7 +251,7 @@ impl<T: TryFrom<crate::LocalResource, Error = crate::ParsingError>, S: Send + Sy
 
 #[cfg(feature = "axum")]
 impl<T: TryFrom<crate::LocalResource, Error = crate::ParsingError>, S: Send + Sync>
-    axum::extract::FromRequest<S> for ExtractDataRequest<T, Any>
+    axum::extract::FromRequest<S> for ExtractPostRequest<T, Any>
 {
     type Rejection = crate::ParsingError;
 
@@ -259,7 +263,7 @@ impl<T: TryFrom<crate::LocalResource, Error = crate::ParsingError>, S: Send + Sy
         })?;
         #[cfg(feature = "musli")]
         {
-            let req: DataRequest = musli::json::from_slice(&bytes).map_err(|e| {
+            let req: DataPostRequest = musli::json::from_slice(&bytes).map_err(|e| {
                 crate::ParsingError::DeserializationError {
                     source: e.to_string(),
                 }
@@ -282,7 +286,7 @@ impl<T: TryFrom<crate::LocalResource, Error = crate::ParsingError>, S: Send + Sy
         }
         #[cfg(not(feature = "musli"))]
         {
-            let req: DataRequest = serde_json::from_slice(&bytes).map_err(|e| {
+            let req: DataPostRequest = serde_json::from_slice(&bytes).map_err(|e| {
                 crate::ParsingError::DeserializationError {
                     source: e.to_string(),
                 }
@@ -302,6 +306,41 @@ impl<T: TryFrom<crate::LocalResource, Error = crate::ParsingError>, S: Send + Sy
                 included: req.included,
                 allow_include: PhantomData,
             })
+        }
+    }
+}
+
+#[cfg(feature = "axum")]
+impl<T: TryFrom<crate::Resource, Error = crate::ParsingError>, S: Send + Sync>
+    axum::extract::FromRequest<S> for ExtractPutRequest<T>
+{
+    type Rejection = crate::ParsingError;
+
+    async fn from_request(req: axum::extract::Request, state: &S) -> Result<Self, Self::Rejection> {
+        let bytes = Bytes::from_request(req, state).await.map_err(|e| {
+            crate::ParsingError::UnrecognizedFormat {
+                source: e.to_string(),
+            }
+        })?;
+        #[cfg(feature = "musli")]
+        {
+            let req: DataPutRequest = musli::json::from_slice(&bytes).map_err(|e| {
+                crate::ParsingError::DeserializationError {
+                    source: e.to_string(),
+                }
+            })?;
+            let data = T::try_from(req.data)?;
+            Ok(Self { data })
+        }
+        #[cfg(not(feature = "musli"))]
+        {
+            let req: DataPutRequest = serde_json::from_slice(&bytes).map_err(|e| {
+                crate::ParsingError::DeserializationError {
+                    source: e.to_string(),
+                }
+            })?;
+            let data = T::try_from(req.data)?;
+            Ok(Self { data })
         }
     }
 }

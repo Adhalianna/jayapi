@@ -82,7 +82,7 @@ where
 
 #[cfg(feature = "axum")]
 impl<R: schemars::JsonSchema, L: crate::json_schema::AlternativeResourceListSchema>
-    aide::OperationInput for crate::extract::ExtractDataRequest<R, L>
+    aide::OperationInput for crate::extract::ExtractPostRequest<R, L>
 {
     fn operation_input(
         ctx: &mut aide::generate::GenContext,
@@ -126,7 +126,7 @@ impl<R: schemars::JsonSchema, L: crate::json_schema::AlternativeResourceListSche
 }
 
 #[cfg(feature = "axum")]
-impl<R: schemars::JsonSchema> aide::OperationInput for crate::extract::ExtractDataRequest<R, ()> {
+impl<R: schemars::JsonSchema> aide::OperationInput for crate::extract::ExtractPostRequest<R, ()> {
     fn operation_input(
         ctx: &mut aide::generate::GenContext,
         operation: &mut aide::openapi::Operation,
@@ -166,7 +166,7 @@ impl<R: schemars::JsonSchema> aide::OperationInput for crate::extract::ExtractDa
 
 #[cfg(feature = "axum")]
 impl<R: schemars::JsonSchema> aide::OperationInput
-    for crate::extract::ExtractDataRequest<R, crate::extract::Any>
+    for crate::extract::ExtractPostRequest<R, crate::extract::Any>
 {
     fn operation_input(
         ctx: &mut aide::generate::GenContext,
@@ -183,6 +183,45 @@ impl<R: schemars::JsonSchema> aide::OperationInput
                         "type": "array",
                         "items": <crate::LocalResource as schemars::JsonSchema>::json_schema(&mut ctx.schema)
                     }
+                }
+            }),
+            external_docs: None,
+            example: None,
+        });
+
+        operation.request_body = Some(aide::openapi::ReferenceOr::Item({
+            let mut body = aide::openapi::RequestBody {
+                description: None,
+                required: true,
+                ..Default::default()
+            };
+            body.content
+                .insert(String::from("application/json"), content);
+            body
+        }))
+    }
+
+    fn inferred_early_responses(
+        _ctx: &mut aide::generate::GenContext,
+        _operation: &mut aide::openapi::Operation,
+    ) -> Vec<(Option<u16>, aide::openapi::Response)> {
+        Vec::new()
+    }
+}
+
+#[cfg(feature = "axum")]
+impl<R: schemars::JsonSchema> aide::OperationInput for crate::extract::ExtractPutRequest<R> {
+    fn operation_input(
+        ctx: &mut aide::generate::GenContext,
+        operation: &mut aide::openapi::Operation,
+    ) {
+        let mut content = aide::openapi::MediaType::default();
+
+        content.schema = Some(aide::openapi::SchemaObject {
+            json_schema: schemars::json_schema!({
+                "type": "object",
+                "properties": {
+                    "data": R::json_schema(&mut ctx.schema),
                 }
             }),
             external_docs: None,
