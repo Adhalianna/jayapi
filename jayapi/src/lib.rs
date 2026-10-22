@@ -66,13 +66,13 @@ pub struct DataResponse<STATUS: status::DataResponseStatus, T = ()> {
 #[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct DataPostRequest {
-    data: crate::LocalResource,
+    pub data: crate::LocalResource,
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     #[cfg_attr(feature = "musli", musli(default, skip_encoding_if = Option::is_none))]
-    included: Option<Vec<crate::LocalResource>>,
+    pub included: Option<Vec<crate::LocalResource>>,
 }
 
 impl<R: AsLocalResource> From<R> for DataPostRequest {
@@ -108,7 +108,7 @@ impl<R: AsResource> From<R> for DataPutRequest {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
 pub struct DataPutRequest {
-    data: crate::Resource,
+    pub data: crate::Resource,
 }
 
 impl<STATUS: status::DataResponseStatus, T> DataResponse<STATUS, T> {
