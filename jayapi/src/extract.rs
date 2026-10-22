@@ -27,7 +27,7 @@ macro_rules! impl_resource_type_list {
             $($tail: crate::FromLocalResource + crate::ResourceType ),+
         {
             fn types() -> Vec<&'static str> {
-                vec![ $($tail::ty()),+ ]
+                vec![ $head::ty(), $($tail::ty()),+ ]
             }
         }
         // Recurse with the tail to generate implementations for smaller tuple sizes
