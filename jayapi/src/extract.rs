@@ -91,7 +91,13 @@ impl<R, L: ResourceTypeList> ExtractPostRequest<R, L> {
     {
         #[cfg(debug_assertions)]
         {
-            L::types().iter().find(|name| **name == R1::ty()).expect("attempted to extract from included a type that was not added to the list of allowed types");
+            L::types()
+                .iter()
+                .find(|name| **name == R1::ty())
+                .expect(&format!(
+                    "resource type name should be in the list of allowed included types ({:?})",
+                    L::types()
+                ));
         }
 
         let parsed = self.included.as_ref().map(|v| {
