@@ -452,6 +452,11 @@ struct RelationshipFieldAttr {
     to_string_method: Option<syn::Path>,
     #[darling(rename = "parse_with")]
     parse_method: Option<syn::Path>,
+    global_or_local: darling::util::Flag,
+    #[darling(rename = "to_global_or_local_with")]
+    to_global_or_local: Option<syn::Path>,
+    #[darling(rename = "from_global_or_local_with")]
+    from_global_or_local: Option<syn::Path>,
 }
 
 impl RelationshipFieldAttr {
@@ -484,21 +489,43 @@ impl RelationshipFieldAttr {
             panic!("\"to_many\" relationships cannot be marked as optional, only 1-to-1 relations can be wrapped in std::option::Option");
         }
 
+        if self.global_or_local.is_present() && self.local.is_present() {
+            panic!("\"global_or_local\" cannot be set on a relationship along with \"local\"")
+        }
+
         RelationshipData {
             name: name.clone(),
             field: field_ident,
             resource_type: self.resource_type.clone().unwrap_or(name),
+            field_type: field_type.clone(),
             to_many: self.to_many.is_present(),
             optional: self.optional.is_present(),
             local: self.local.is_present(),
+            global_or_local: self.global_or_local.is_present(),
             parse_method: self.parse_method.to_owned().unwrap_or(
+                if self.global_or_local.is_present() && self.to_many.is_present() {
+                    syn::Path::from_string(&("str::parse::<::jayapi::GlobalOrLocalId<_,_>>")).unwrap()
+                } else {
                 syn::Path::from_string(&("str::parse::<".to_owned() + &single_item_type + ">"))
-                    .unwrap(),
+                    .unwrap()
+                },
             ),
             to_string_method: self
                 .to_string_method
                 .to_owned()
                 .unwrap_or(syn::Path::from_string("::std::string::ToString::to_string").unwrap()),
+            to_global_or_local_method: self.to_global_or_local.to_owned().unwrap_or(
+                syn::Path::from_string(
+                    &("::std::convert::Into::<::jayapi::GlobalOrLocalId<_,_>>::into"),
+                )
+                .unwrap(),
+            ),
+            from_global_or_local_method: self.from_global_or_local.to_owned().unwrap_or(
+                syn::Path::from_string(
+                    &("::std::convert::From::<::jayapi::GlobalOrLocalId<_,_>>::from"),
+                )
+                .unwrap(),
+            ),
         }
     }
 }
@@ -507,11 +534,15 @@ struct RelationshipData {
     name: String,
     field: IndexOrField,
     resource_type: String,
+    field_type: syn::Type,
     to_many: bool,
     optional: bool,
     local: bool,
+    global_or_local: bool,
     to_string_method: syn::Path,
     parse_method: syn::Path,
+    to_global_or_local_method: syn::Path,
+    from_global_or_local_method: syn::Path,
 }
 
 impl RelationshipData {
@@ -641,89 +672,186 @@ impl RelationshipData {
         let resource_type = &self.resource_type;
         let to_string_method = &self.to_string_method;
         let field = &self.field;
+        let to_global_or_local_method = &self.to_global_or_local_method;
 
-        if self.local {
+        if self.global_or_local {
             if self.to_many {
                 quote! {
                     map.insert(
                         #name.to_owned(),
-                        ::jayapi::LocalOrGlobalRelationship::Local(::jayapi::LocalRelationship::Relation1toM {
-                            data: self.#field.iter().map(|item| {
-                                ::jayapi::LocalResourceIdentifier{
-                                    r#type: #resource_type.to_owned(),
-                                    lid: #to_string_method(item)
-                                }
-                            }).collect(),
-                        })
+                        ::jayapi::LocalOrGlobalRelationship::Relation1toM {
+                            data: self.#field
+                                .iter()
+                                .map(|item| {
+                                    #to_global_or_local_method(item.clone())
+                                })
+                                .map(|item| {
+                                    match item {
+                                        ::jayapi::GlobalOrLocalId::<_,_>::Global(id) => {
+                                            ::jayapi::GlobalOrLocalIdentifier::Global(
+                                                ::jayapi::ResourceIdentifier {
+                                                    r#type: #resource_type.to_owned(),
+                                                    id: #to_string_method(&id),
+                                                }
+                                            )
+                                        },
+                                        ::jayapi::GlobalOrLocalId::<_,_>::Local(id) => {
+                                            ::jayapi::GlobalOrLocalIdentifier::Local(
+                                                ::jayapi::LocalResourceIdentifier{
+                                                    r#type: #resource_type.to_owned(),
+                                                    lid: #to_string_method(&id),
+                                                }
+                                            )
+                                        }
+                                    }
+                                })
+                                .collect(),
+                        }
                     );
-                }
-            } else if self.optional {
-                quote! {
-                    if let ::std::option::Option::Some(id) = &self.#field {
-                        map.insert(
-                            #name.to_owned(),
-                            ::jayapi::LocalOrGlobalRelationship::Local(::jayapi::LocalRelationship::Relation1to1 {
-                                data: ::jayapi::LocalResourceIdentifier {
-                                    r#type: #resource_type.to_owned(),
-                                    lid: #to_string_method(id),
-                                }
-                            })
-                        );
-                    }
                 }
             } else {
-                quote! {
-                    map.insert(
-                        #name.to_owned(),
-                        ::jayapi::LocalOrGlobalRelationship::Local(::jayapi::LocalRelationship::Relation1to1 {
-                            data: ::jayapi::LocalResourceIdentifier {
-                                r#type: #resource_type.to_owned(),
-                                lid: #to_string_method(&self.#field),
-                            }
-                        })
-                    );
+                if self.optional {
+                    quote! {
+                        if let ::std::option::Option::Some(id) = &self.#field {
+                            map.insert(
+                                #name.to_owned(),
+                                ::jayapi::LocalOrGlobalRelationship::Relation1to1(
+                                    match #to_global_or_local_method(id.clone()) {
+                                        ::jayapi::GlobalOrLocalId::<_,_>::Global(id) => {
+                                            ::jayapi::Relation1to1::Global{
+                                                data: ::jayapi::ResourceIdentifier {
+                                                    r#type: #resource_type.to_owned(),
+                                                    id: #to_string_method(&id)
+                                                }
+                                            }
+                                        },
+                                        ::jayapi::GlobalOrLocalId::<_,_>::Local(id) => {
+                                            ::jayapi::Relation1to1::Local{
+                                                data: ::jayapi::LocalResourceIdentifier {
+                                                    r#type: #resource_type.to_owned(),
+                                                    lid: #to_string_method(&id)
+                                                }
+                                            }
+                                        }
+                                    }
+                                )
+                            );
+                        }
+                    }
+                } else {
+                    quote! {
+                        map.insert(
+                            #name.to_owned(),
+                            ::jayapi::LocalOrGlobalRelationship::Relation1to1(
+                                match #to_global_or_local_method(self.#field.clone()) {
+                                    ::jayapi::GlobalOrLocalId::<_,_>::Global(id) => {
+                                        ::jayapi::Relation1to1::Global{
+                                            data: ::jayapi::ResourceIdentifier {
+                                                r#type: #resource_type.to_owned(),
+                                                id: #to_string_method(&id)
+                                            }
+                                        }
+                                    },
+                                    ::jayapi::GlobalOrLocalId::<_,_>::Local(id) => {
+                                        ::jayapi::Relation1to1::Local{
+                                            data: ::jayapi::LocalResourceIdentifier {
+                                                r#type: #resource_type.to_owned(),
+                                                lid: #to_string_method(&id)
+                                            }
+                                        }
+                                    }
+                                }
+                            )
+                        );
+                    }
                 }
             }
         } else {
-            if self.to_many {
-                quote! {
-                    map.insert(
-                        #name.to_owned(),
-                        ::jayapi::LocalOrGlobalRelationship::Global(::jayapi::Relationship::Relation1toM {
-                            data: self.#field.iter().map(|item| {
-                                ::jayapi::ResourceIdentifier{
-                                    r#type: #resource_type.to_owned(),
-                                    id: #to_string_method(item)
-                                }
-                            }).collect(),
-                        })
-                    );
-                }
-            } else if self.optional {
-                quote! {
-                    if let ::std::option::Option::Some(id) = &self.#field {
+            if self.local {
+                if self.to_many {
+                    quote! {
                         map.insert(
                             #name.to_owned(),
-                            ::jayapi::LocalOrGlobalRelationship::Global(::jayapi::Relationship::Relation1to1 {
-                                data: ::jayapi::ResourceIdentifier {
+                            ::jayapi::LocalOrGlobalRelationship::Relation1toM {
+                                data: self.#field.iter().map(|item| {
+                                    ::jayapi::GlobalOrLocalIdentifier::Local(                                        ::jayapi::LocalResourceIdentifier{
+                                            r#type: #resource_type.to_owned(),
+                                            lid: #to_string_method(item)
+                                        }
+                                    )
+                                }).collect(),
+                            }
+                        );
+                    }
+                } else if self.optional {
+                    quote! {
+                        if let ::std::option::Option::Some(id) = &self.#field {
+                            map.insert(
+                                #name.to_owned(),
+                                ::jayapi::LocalOrGlobalRelationship::Relation1to1(
+                                    ::jayapi::Relation1to1::Local{
+                                    data: ::jayapi::LocalResourceIdentifier {
+                                        r#type: #resource_type.to_owned(),
+                                        lid: #to_string_method(id),
+                                    }
+                                })
+                            );
+                        }
+                    }
+                } else {
+                    quote! {
+                        map.insert(
+                            #name.to_owned(),
+                            ::jayapi::LocalOrGlobalRelationship::Relation1to1(::jayapi::Relation1to1::Local {
+                                data: ::jayapi::LocalResourceIdentifier {
                                     r#type: #resource_type.to_owned(),
-                                    id: #to_string_method(id),
+                                    lid: #to_string_method(&self.#field),
                                 }
                             })
                         );
                     }
                 }
             } else {
-                quote! {
-                    map.insert(
-                        #name.to_owned(),
-                        ::jayapi::LocalOrGlobalRelationship::Global(::jayapi::Relationship::Relation1to1 {
-                            data: ::jayapi::ResourceIdentifier {
-                                r#type: #resource_type.to_owned(),
-                                id: #to_string_method(&self.#field),
+                if self.to_many {
+                    quote! {
+                        map.insert(
+                            #name.to_owned(),
+                            ::jayapi::LocalOrGlobalRelationship::Relation1toM {
+                                data: self.#field.iter().map(|item| {
+                                    ::jayapi::GlobalOrLocalIdentifier::Global(::jayapi::ResourceIdentifier{
+                                        r#type: #resource_type.to_owned(),
+                                        id: #to_string_method(item)
+                                    })
+                                }).collect(),
                             }
-                        })
-                    );
+                        );
+                    }
+                } else if self.optional {
+                    quote! {
+                        if let ::std::option::Option::Some(id) = &self.#field {
+                            map.insert(
+                                #name.to_owned(),
+                                ::jayapi::LocalOrGlobalRelationship::Relation1to1(::jayapi::Relation1to1::Global {
+                                    data: ::jayapi::ResourceIdentifier {
+                                        r#type: #resource_type.to_owned(),
+                                        id: #to_string_method(id),
+                                    }
+                                })
+                            );
+                        }
+                    }
+                } else {
+                    quote! {
+                        map.insert(
+                            #name.to_owned(),
+                            ::jayapi::LocalOrGlobalRelationship::Relation1to1(::jayapi::Relation1to1::Global {
+                                data: ::jayapi::ResourceIdentifier {
+                                    r#type: #resource_type.to_owned(),
+                                    id: #to_string_method(&self.#field),
+                                }
+                            })
+                        );
+                    }
                 }
             }
         }
@@ -736,13 +864,14 @@ impl RelationshipData {
     }
     fn into_from_resource_tokens_storage_var(&self) -> proc_macro2::TokenStream {
         let var_name = &self.storage_var();
+        let field_type = &self.field_type;
         if self.optional {
             quote! {
-                let mut #var_name = ::std::option::Option::None;
+                let mut #var_name: #field_type = ::std::option::Option::None;
             }
         } else {
             quote! {
-                let mut #var_name = ::std::default::Default::default();
+                let mut #var_name: #field_type = ::std::default::Default::default();
             }
         }
     }
@@ -813,106 +942,172 @@ impl RelationshipData {
         let relation_name = &self.name;
         let var_name = &self.storage_var();
         let parse_method = &self.parse_method;
+        let from_global_or_local_method = &self.from_global_or_local_method;
 
-        if self.to_many {
-            quote! {
-                #relation_name => {
-                    match v {
-                        ::jayapi::LocalOrGlobalRelationship::Local(rel) => match rel {
-                            ::jayapi::LocalRelationship::Relation1toM { data: data } => {
-                                #var_name = data.iter().map(|item| #parse_method(&item.lid).map_err(|e| ::jayapi::ParsingError::ValueParsingError {
-                                    err: e.to_string(),
-                                    on_field: #relation_name.to_owned(),
+        if self.global_or_local {
+            if self.to_many {
+                quote! {
+                    #relation_name => {
+                        match v {
+                            ::jayapi::LocalOrGlobalRelationship::Relation1toM { data: data } => {
+                                #var_name = data.iter().map(|item| match item {
+                                    ::jayapi::GlobalOrLocalIdentifier::Global(iden) => {
+                                        #parse_method(&iden.id).map(|id| ::jayapi::GlobalOrLocalId::Global(id))
+                                    },
+                                    ::jayapi::GlobalOrLocalIdentifier::Local(iden) => {
+                                        #parse_method(&iden.lid).map(|lid| ::jayapi::GlobalOrLocalId::Local(lid))
+                                    }
+                                }).map(|res| res
+                                    .map(|id| #from_global_or_local_method(id))
+                                    .map_err(|e| ::jayapi::ParsingError::ValueParsingError {
+                                        err: e.to_string(),
+                                        on_field: #relation_name.to_owned(),
                                 })).collect::<Result<_, ::jayapi::ParsingError>>()?;
                             },
-                            _ => {
-                                return Err(::jayapi::ParsingError::WrongRelationshipKind {
-                                    relationship: #relation_name.to_owned(),
-                                });
-                            }
-                        },
-                        ::jayapi::LocalOrGlobalRelationship::Global(rel) => match rel {
-                            ::jayapi::Relationship::Relation1toM { data: data } => {
-                                #var_name = data.iter().map(|item| #parse_method(&item.id).map_err(|e| ::jayapi::ParsingError::ValueParsingError {
-                                    err: e.to_string(),
-                                    on_field: #relation_name.to_owned(),
-                                })).collect::<Result<_, ::jayapi::ParsingError>>()?;
-                            },
-                            _ => {
-                                return Err(::jayapi::ParsingError::WrongRelationshipKind {
-                                    relationship: #relation_name.to_owned(),
-                                });
-                            }
+                            _ => return Err(::jayapi::ParsingError::WrongRelationshipKind {
+                                relationship: #relation_name.to_owned(),
+                            })
                         }
                     }
                 }
-            }
-        } else if self.optional {
-            quote! {
-                #relation_name => {
-                    match v {
-                        ::jayapi::LocalOrGlobalRelationship::Global(rel) => match rel {
-                            ::jayapi::Relationship::Relation1to1 { data: data } => {
-                                #var_name = ::std::option::Option::Some(
-                                    #parse_method(&data.id).map_err(|e| ::jayapi::ParsingError::ValueParsingError {
-                                        err: e.to_string(),
-                                        on_field: #relation_name.to_owned(),
-                                    })?
-                                );
-                            },
-                            _ => {
-                                return Err(::jayapi::ParsingError::WrongRelationshipKind {
-                                    relationship: #relation_name.to_owned(),
+            } else if self.optional {
+                quote! {
+                    #relation_name => {
+                        match v {
+                            ::jayapi::LocalOrGlobalRelationship::Relation1to1(rel) => {
+                                #var_name = ::std::option::Option::Some({
+                                    let global_or_local = match rel {
+                                        ::jayapi::Relation1to1::Global{data: iden} => {
+                                            #parse_method(&iden.id)
+                                                .map(|id| ::jayapi::GlobalOrLocalId::Global(id))
+                                                .map_err(|e| ::jayapi::ParsingError::ValueParsingError {
+                                                    err: e.to_string(),
+                                                    on_field: #relation_name.to_owned(),
+                                                })
+                                        },
+                                        ::jayapi::Relation1to1::Local{data: iden} => {
+                                            #parse_method(&iden.lid)
+                                                .map(|id| ::jayapi::GlobalOrLocalId::Local(id))
+                                                .map_err(|e| ::jayapi::ParsingError::ValueParsingError {
+                                                    err: e.to_string(),
+                                                    on_field: #relation_name.to_owned(),
+                                                })
+                                        }
+                                    }?;
+                                    #from_global_or_local_method(global_or_local)
                                 });
                             }
-                        },
-                        ::jayapi::LocalOrGlobalRelationship::Local(rel) => match rel {
-                            ::jayapi::LocalRelationship::Relation1to1 { data: data } => {
-                                #var_name = ::std::option::Option::Some(
-                                    #parse_method(&data.lid).map_err(|e| ::jayapi::ParsingError::ValueParsingError {
-                                        err: e.to_string(),
-                                        on_field: #relation_name.to_owned(),
-                                    })?
-                                );
+                            _ => return Err(::jayapi::ParsingError::WrongRelationshipKind {
+                                relationship: #relation_name.to_owned(),
+                            })
+                        }
+                    }
+                }
+            } else {
+                quote! {
+                    #relation_name => {
+                        match v {
+                            ::jayapi::LocalOrGlobalRelationship::Relation1to1(rel) => {
+                                #var_name = {
+                                    let global_or_local = match rel {
+                                        ::jayapi::Relation1to1::Global{data: iden} => {
+                                            #parse_method(&iden.id)
+                                                .map(|id| ::jayapi::GlobalOrLocalId::Global(id))
+                                                .map_err(|e| ::jayapi::ParsingError::ValueParsingError {
+                                                    err: e.to_string(),
+                                                    on_field: #relation_name.to_owned(),
+                                                })
+                                        },
+                                        ::jayapi::Relation1to1::Local{data: iden} => {
+                                            #parse_method(&iden.lid)
+                                                .map(|id| ::jayapi::GlobalOrLocalId::Local(id))
+                                                .map_err(|e| ::jayapi::ParsingError::ValueParsingError {
+                                                    err: e.to_string(),
+                                                    on_field: #relation_name.to_owned(),
+                                                })
+                                        }
+                                    }?;
+                                    #from_global_or_local_method(global_or_local)
+                                };
                             }
-                            _ => {
-                                return Err(::jayapi::ParsingError::WrongRelationshipKind {
-                                    relationship: #relation_name.to_owned(),
-                                });
-                            }
+                            _ => return Err(::jayapi::ParsingError::WrongRelationshipKind {
+                                relationship: #relation_name.to_owned(),
+                            })
                         }
                     }
                 }
             }
         } else {
-            quote! {
-                #relation_name => {
-                    match v {
-                        ::jayapi::LocalOrGlobalRelationship::Local(rel) => match rel {
-                            ::jayapi::LocalRelationship::Relation1to1 { data: data } => {
-                                #var_name = #parse_method(&data.lid).map_err(|e| ::jayapi::ParsingError::ValueParsingError {
+            if self.to_many {
+                quote! {
+                    #relation_name => {
+                        match v {
+                            ::jayapi::LocalOrGlobalRelationship::Relation1toM { data: data } => {
+                                #var_name = data.iter().map(|item| match item {
+                                    ::jayapi::GlobalOrLocalIdentifier::Global(iden) => {
+                                        #parse_method(&iden.id)
+                                    },
+                                    ::jayapi::GlobalOrLocalIdentifier::Local(iden) => {
+                                        #parse_method(&iden.lid)
+                                    }
+                                }).map(|res| res.map_err(|e| ::jayapi::ParsingError::ValueParsingError {
+                                    err: e.to_string(),
+                                    on_field: #relation_name.to_owned(),
+                                })).collect::<Result<_, ::jayapi::ParsingError>>()?;
+                            },
+                            _ => return Err(::jayapi::ParsingError::WrongRelationshipKind {
+                                relationship: #relation_name.to_owned(),
+                            })
+                        }
+                    }
+                }
+            } else if self.optional {
+                quote! {
+                    #relation_name => {
+                        match v {
+                            ::jayapi::LocalOrGlobalRelationship::Relation1to1(rel) => {
+                                let __res = match rel {
+                                    ::jayapi::Relation1to1::Global{ data: iden } => {
+                                        #parse_method(&iden.id)
+                                    },
+                                    ::jayapi::Relation1to1::Local{ data: iden } => {
+                                        #parse_method(&iden.lid)
+                                    }
+                                };
+                                #var_name = ::std::option::Option::Some(
+                                    __res.map_err(|e| ::jayapi::ParsingError::ValueParsingError {
+                                        err: e.to_string(),
+                                        on_field: #relation_name.to_owned(),
+                                    })?
+                                );
+                            },
+                            _ => return Err(::jayapi::ParsingError::WrongRelationshipKind {
+                                relationship: #relation_name.to_owned(),
+                            })
+                        }
+                    }
+                }
+            } else {
+                quote! {
+                    #relation_name => {
+                        match v {
+                            ::jayapi::LocalOrGlobalRelationship::Relation1to1(rel) => {
+                                let __res = match rel {
+                                    ::jayapi::Relation1to1::Global{ data: iden } => {
+                                        #parse_method(&iden.id)
+                                    },
+                                    ::jayapi::Relation1to1::Local{ data: iden } => {
+                                        #parse_method(&iden.lid)
+                                    }
+                                };
+                                #var_name = __res.map_err(|e| ::jayapi::ParsingError::ValueParsingError {
                                     err: e.to_string(),
                                     on_field: #relation_name.to_owned(),
                                 })?;
                             },
-                            _ => {
-                                return Err(::jayapi::ParsingError::WrongRelationshipKind {
-                                    relationship: #relation_name.to_owned(),
-                                });
-                            }
-                        },
-                        ::jayapi::LocalOrGlobalRelationship::Global(rel) => match rel {
-                            ::jayapi::Relationship::Relation1to1 { data: data } => {
-                                #var_name = #parse_method(&data.id).map_err(|e| ::jayapi::ParsingError::ValueParsingError {
-                                    err: e.to_string(),
-                                    on_field: #relation_name.to_owned(),
-                                })?;
-                            },
-                            _ => {
-                                return Err(::jayapi::ParsingError::WrongRelationshipKind {
-                                    relationship: #relation_name.to_owned(),
-                                });
-                            }
+                            _ => return Err(::jayapi::ParsingError::WrongRelationshipKind {
+                                relationship: #relation_name.to_owned(),
+                            })
                         }
                     }
                 }

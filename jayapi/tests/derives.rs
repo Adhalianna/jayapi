@@ -18,6 +18,12 @@ pub struct Test {
     relation: String,
     #[jayapi(relationship(name = "optional", optional, resource_type = "another_test_resource"))]
     optional_relation: Option<String>,
+    #[jayapi(relationship(global_or_local, resource_type = "some_resource"))]
+    maybe_local_relation: jayapi::GlobalOrLocalId<String, String>,
+    #[jayapi(relationship(global_or_local, to_many, resource_type = "next_resource"))]
+    many_local_or_global: Vec<jayapi::GlobalOrLocalId<String, u16>>,
+    #[jayapi(relationship(global_or_local, optional, resource_type = "whooosh"))]
+    optional_global_or_local: Option<jayapi::GlobalOrLocalId<u16, String>>
 }
 
 pub fn main() {

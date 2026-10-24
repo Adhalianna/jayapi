@@ -460,11 +460,159 @@ pub enum LocalRelationship {
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(untagged))]
+#[cfg_attr(feature = "musli", derive(musli::Decode, musli::Encode))]
+#[cfg_attr(feature = "musli", musli(untagged))]
+pub enum Relation1to1 {
+    Global { data: ResourceIdentifier },
+    Local { data: LocalResourceIdentifier },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(untagged))]
+#[cfg_attr(feature = "musli", derive(musli::Decode, musli::Encode))]
+#[cfg_attr(feature = "musli", musli(untagged))]
+pub enum GlobalOrLocalIdentifier {
+    Global(ResourceIdentifier),
+    Local(LocalResourceIdentifier),
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(untagged))]
 #[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
 #[cfg_attr(feature = "musli", musli(untagged))]
 pub enum LocalOrGlobalRelationship {
-    Local(LocalRelationship),
-    Global(Relationship),
+    Relation1to1(Relation1to1),
+    Relation1toM { data: Vec<GlobalOrLocalIdentifier> },
+}
+
+/// Special type that can be used within the derive macro.
+///
+/// # Notes
+/// The enum starts with `Global` variant because it is assumed that in case the variants might get confused
+/// in the untagged representation, the `Global` variant is preferred. In general this struct is not
+/// recommended to be used with id types that might get easily confused.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(untagged))]
+#[cfg_attr(feature = "musli", derive(musli::Encode, musli::Decode))]
+#[cfg_attr(feature = "musli", musli(untagged))]
+pub enum GlobalOrLocalId<T1, T2> {
+    Global(T1),
+    Local(T2),
+}
+
+impl<T1, T2> std::fmt::Display for GlobalOrLocalId<T1, T2>
+where
+    T1: std::fmt::Display,
+    T2: std::fmt::Display,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GlobalOrLocalId::Global(id) => write!(f, "{id}"),
+            GlobalOrLocalId::Local(id) => write!(f, "{id}"),
+        }
+    }
+}
+
+impl<T1, T2> From<GlobalOrLocalId<T1, GlobalOrLocalId<T1, T2>>> for GlobalOrLocalId<T1, T2> {
+    fn from(value: GlobalOrLocalId<T1, GlobalOrLocalId<T1, T2>>) -> Self {
+        match value {
+            GlobalOrLocalId::Global(global) => Self::Global(global),
+            GlobalOrLocalId::Local(global_or_local) => match global_or_local {
+                GlobalOrLocalId::Global(global) => Self::Global(global),
+                GlobalOrLocalId::Local(local) => Self::Local(local),
+            },
+        }
+    }
+}
+
+impl<T1, T2> From<GlobalOrLocalId<GlobalOrLocalId<T1, T2>, T2>> for GlobalOrLocalId<T1, T2> {
+    fn from(value: GlobalOrLocalId<GlobalOrLocalId<T1, T2>, T2>) -> Self {
+        match value {
+            GlobalOrLocalId::Global(global_or_local) => match global_or_local {
+                GlobalOrLocalId::Global(global) => Self::Global(global),
+                GlobalOrLocalId::Local(local) => Self::Local(local),
+            },
+            GlobalOrLocalId::Local(local) => Self::Local(local),
+        }
+    }
+}
+
+impl<T1, T2> From<GlobalOrLocalId<GlobalOrLocalId<T1, T2>, GlobalOrLocalId<T1, T2>>>
+    for GlobalOrLocalId<T1, T2>
+{
+    fn from(value: GlobalOrLocalId<GlobalOrLocalId<T1, T2>, GlobalOrLocalId<T1, T2>>) -> Self {
+        match value {
+            GlobalOrLocalId::Global(global_or_local) => match global_or_local {
+                GlobalOrLocalId::Global(global) => Self::Global(global),
+                GlobalOrLocalId::Local(local) => Self::Local(local),
+            },
+            GlobalOrLocalId::Local(global_or_local) => match global_or_local {
+                GlobalOrLocalId::Global(global) => Self::Global(global),
+                GlobalOrLocalId::Local(local) => Self::Local(local),
+            },
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct GlobalAndLocalIdParsingErr<E1, E2> {
+    pub global: E1,
+    pub local: E2,
+}
+
+impl<E1, E2> std::fmt::Display for GlobalAndLocalIdParsingErr<E1, E2>
+where
+    E1: std::fmt::Display,
+    E2: std::fmt::Display,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "failed to parse as global id with error: {}; failed to parse as local id with error: {}",
+            self.global, self.local
+        )
+    }
+}
+
+impl<E1, E2> std::error::Error for GlobalAndLocalIdParsingErr<E1, E2>
+where
+    E1: std::fmt::Display + std::fmt::Debug,
+    E2: std::fmt::Display + std::fmt::Debug,
+{
+}
+
+impl<T1, T2> std::str::FromStr for GlobalOrLocalId<T1, T2>
+where
+    T1: std::str::FromStr,
+    T2: std::str::FromStr,
+{
+    type Err =
+        GlobalAndLocalIdParsingErr<<T1 as std::str::FromStr>::Err, <T2 as std::str::FromStr>::Err>;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match T1::from_str(s) {
+            Ok(global_id) => Ok(Self::Global(global_id)),
+            Err(global_id_err) => match T2::from_str(s) {
+                Ok(local_id) => Ok(Self::Local(local_id)),
+                Err(local_id_err) => Err(GlobalAndLocalIdParsingErr {
+                    global: global_id_err,
+                    local: local_id_err,
+                }),
+            },
+        }
+    }
+}
+
+impl<T1, T2> std::default::Default for GlobalOrLocalId<T1, T2>
+where
+    T2: std::default::Default,
+{
+    fn default() -> Self {
+        Self::Local(T2::default())
+    }
 }
 
 impl RelationshipsMap {
